@@ -1068,18 +1068,22 @@ fn assign_to_job_object(child: &Child) {
     }
 }
 
-/// Mata node.exe huérfanos de arranques anteriores cuyo command-line apunta a
-/// NUESTRO standalone empaquetado. Nunca toca otros node (dev, otras apps).
-/// Las 2ª instancias vivas nunca llegan acá (single-instance las frena antes
-/// del setup), así que todo match es un huérfano seguro de matar.
-#[cfg(not(debug_assertions))]
-fn reap_stale_node_servers(standalone_dir: &Path) {
-    let needle = standalone_dir
-        .to_string_lossy()
-        .replace('\\', "/")
-        .to_lowercase();
+/// Resuelve el standalone empaquetado igual que el setup (misma prioridad).
+fn resolve_standalone_dir(resource_dir: &Path) -> std::path::PathBuf {
+    if resource_dir.join("_up_").join("app_standalone").join("server.js").exists() {
+        resource_dir.join("_up_").join("app_standalone")
+    } else if resource_dir.join("app_standalone").join("server.js").exists() {
+        resource_dir.join("app_standalone")
+    } else {
+        resource_dir.to_path_buf()
+    }
+}
+
+/// PIDs de node.exe cuyo command-line contiene `needle` (ruta del standalone).
+/// Solo matchea el empaquetado propio; nunca dev ni otras apps.
+fn find_stale_node_pids(needle: &str) -> Vec<u32> {
     if needle.is_empty() {
-        return;
+        return vec![];
     }
     let ps = format!(
         "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | ForEach-Object {{ if ($_.CommandLine -and $_.CommandLine.Replace('\\','/').ToLower().Contains('{0}')) {{ $_.ProcessId }} }}",
@@ -1089,24 +1093,74 @@ fn reap_stale_node_servers(standalone_dir: &Path) {
         .args(["-NoProfile", "-NonInteractive", "-Command", &ps])
         .creation_flags(CREATE_NO_WINDOW)
         .output();
-    let pids: Vec<u32> = out
-        .ok()
+    // Nunca incluir al propio proceso (defensivo).
+    let me = std::process::id();
+    out.ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default()
         .split_whitespace()
         .filter_map(|s| s.parse::<u32>().ok())
-        .collect();
-    // Nunca matar al propio proceso (defensivo: powershell no es node, pero
-    // el chequeo es gratis).
-    let me = std::process::id();
-    for pid in pids.into_iter().filter(|p| *p != me) {
-        println!("[Startup] Matando node huérfano (pid {})", pid);
-        let _ = Command::new("taskkill")
+        .filter(|p| *p != me)
+        .collect()
+}
+
+/// Mata por árbol (/T) y con fuerza (/F). Devuelve cuántos taskkill salieron ok.
+fn kill_pids(pids: &[u32], tag: &str) -> usize {
+    let mut ok = 0;
+    for pid in pids {
+        println!("[{}] Matando node huérfano (pid {})", tag, pid);
+        let status = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .creation_flags(CREATE_NO_WINDOW)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+        if status.map(|s| s.success()).unwrap_or(false) {
+            ok += 1;
+        }
+    }
+    ok
+}
+
+fn standalone_needle(standalone_dir: &Path) -> String {
+    standalone_dir
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_lowercase()
+}
+
+/// Reaper de arranque: mata huérfanos de arranques anteriores. Las 2ª
+/// instancias vivas nunca llegan acá (single-instance las frena antes del
+/// setup), así que todo match es un huérfano seguro de matar.
+#[cfg(not(debug_assertions))]
+fn reap_stale_node_servers(standalone_dir: &Path) {
+    let needle = standalone_needle(standalone_dir);
+    if needle.is_empty() {
+        return;
+    }
+    kill_pids(&find_stale_node_pids(&needle), "Startup");
+}
+
+/// Comando para el flujo de update: caza huérfanos que el `kill_server`
+/// (solo mata al hijo trackeado) no alcanza — ej. restos de versiones sin
+/// Job Object. Sin esto, el puerto 3001 sigue ocupado y el instalador falla.
+/// Devuelve cuántos mató. En debug no hace nada (0).
+#[tauri::command]
+async fn kill_stale_node_servers(app_handle: tauri::AppHandle) -> Result<usize, String> {
+    #[cfg(debug_assertions)]
+    {
+        let _ = app_handle;
+        return Ok(0);
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let resource_dir = app_handle.path().resource_dir().unwrap_or_default();
+        let standalone_dir = resolve_standalone_dir(&resource_dir);
+        let needle = standalone_needle(&standalone_dir);
+        if needle.is_empty() {
+            return Ok(0);
+        }
+        Ok(kill_pids(&find_stale_node_pids(&needle), "Update"))
     }
 }
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -1125,7 +1179,7 @@ pub fn run() {
       }
     }))
     .manage(ServerState(Mutex::new(None)))
-    .invoke_handler(tauri::generate_handler![backup_database, restore_database, kill_server, save_report_file])
+    .invoke_handler(tauri::generate_handler![backup_database, restore_database, kill_server, kill_stale_node_servers, save_report_file])
     .setup(|app| {
       #[cfg(debug_assertions)]
       {
@@ -1161,13 +1215,7 @@ pub fn run() {
 
         let db_url = format!("file:{}", target_db.to_string_lossy().replace('\\', "/"));
 
-        let standalone_dir = if resource_dir.join("_up_").join("app_standalone").join("server.js").exists() {
-          resource_dir.join("_up_").join("app_standalone")
-        } else if resource_dir.join("app_standalone").join("server.js").exists() {
-          resource_dir.join("app_standalone")
-        } else {
-          resource_dir.clone()
-        };
+        let standalone_dir = resolve_standalone_dir(&resource_dir);
 
         let server_js = standalone_dir.join("server.js");
         let local_node = standalone_dir.join("node.exe");

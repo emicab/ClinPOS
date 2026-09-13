@@ -2,6 +2,11 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.15.2] - 2026-09-13
+
+### Corregido
+- **Updater sin salida**: el flujo de actualización ahora caza `node.exe` huérfanos de versiones viejas (`kill_stale_node_servers`, solo el standalone empaquetado) antes de esperar el puerto libre, en vez de bloquearse pidiendo cerrar la app. Nuevo comando Tauri + refactor del reaper de arranque en piezas reutilizables.
+
 ## [1.15.1] - 2026-09-13
 
 ### Corregido

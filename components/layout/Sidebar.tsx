@@ -517,10 +517,21 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       } catch (e) {
         console.error("Failed to kill server", e);
       }
+      // Cazar huérfanos de versiones viejas (sin Job Object) que atan el
+      // puerto 3001 y los archivos. Sin esto, el update se bloquea sin salida
+      // porque cerrar la app también cierra esta pantalla.
+      try {
+        const killed = await invoke<number>("kill_stale_node_servers");
+        if (killed > 0) {
+          console.log(`Update: se eliminaron ${killed} procesos node huérfanos`);
+        }
+      } catch (e) {
+        console.error("Failed to kill stale servers", e);
+      }
       const portFree = await waitForPortFree();
       if (!portFree) {
         toast.error(
-          "El servidor local sigue en uso. Cerrá manualmente la aplicación (revisá que no queden procesos node.exe de ClinPOS) e intentá de nuevo.",
+          "El servidor local sigue ocupado después de limpiar procesos. Reiniciá la PC e intentá actualizar de nuevo.",
         );
         return;
       }
