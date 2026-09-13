@@ -87,7 +87,9 @@ export function ProductTableRow({
                 const bs = product.branchStocks?.find(
                   (b: any) => b.branchId === Number(activeBranchId),
                 );
-                return bs ? bs.quantityStock : 0;
+                // Sin fila para la sucursal = stock global (legados / autocurado
+                // pendiente), nunca 0 fantasma.
+                return bs ? bs.quantityStock : product.quantityStock;
               }
               return product.quantityStock;
             })()}

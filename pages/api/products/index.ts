@@ -55,17 +55,20 @@ export default async function handler(
         }
     }
 
-    // Filtro por Sucursal (branchId)
+    // Filtro por Sucursal (branchId). Inclusivo: los productos SIN filas de
+    // stock (legados / globales) aparecen en toda sucursal. El autocurado de
+    // filas faltantes ocurre más abajo, tras el fetch.
     const { branchId } = req.query;
+    let parsedBranchId: number | null = null;
     if (branchId && typeof branchId === 'string' && branchId !== '') {
-        const parsedBranchId = parseInt(branchId);
-        if (!isNaN(parsedBranchId)) {
-            whereClause.branchStocks = {
-              some: {
-                branchId: parsedBranchId
-              }
-            };
-        }
+        const n = parseInt(branchId);
+        if (!isNaN(n)) parsedBranchId = n;
+    }
+    if (parsedBranchId !== null) {
+        whereClause.OR = [
+          { branchStocks: { some: { branchId: parsedBranchId } } },
+          { branchStocks: { none: {} } },
+        ];
     }
 
     const page = req.query.page ? parseInt(req.query.page as string) : undefined;
@@ -73,6 +76,20 @@ export default async function handler(
 
     try {
       const db = await resolveDbForRequest(req);
+      // Sucursal inexistente → 400 explícito en vez de lista vacía confusa.
+      // Se trae isMain para el backfill: solo la Principal hereda el stock
+      // global; las demás arrancan en 0 (el físico vive en la Principal).
+      let branchIsMain = false;
+      if (parsedBranchId !== null) {
+        const branch = await db.branch.findUnique({
+          where: { id: parsedBranchId },
+          select: { id: true, isMain: true },
+        });
+        if (!branch) {
+          return res.status(400).json({ message: 'La sucursal indicada no existe.' });
+        }
+        branchIsMain = branch.isMain === true;
+      }
       // 1. Obtener productos aplicando filtros base (marca, categoría, proveedor)
       let products: any[] = await db.product.findMany({
         where: whereClause,
@@ -167,6 +184,42 @@ export default async function handler(
           });
         }
         products = derivedProducts;
+      }
+
+      // Autocurado: crear las filas de stock faltantes para la sucursal
+      // pedida. La Principal hereda el stock global; las demás arrancan en 0
+      // (si no, el global —que es suma de filas— se duplicaría). Idempotente.
+      if (parsedBranchId !== null) {
+        const missing = products.filter((p: any) =>
+          !(p.branchStocks || []).some((bs: any) => bs.branchId === parsedBranchId),
+        );
+        if (missing.length > 0) {
+          try {
+            // Sin skipDuplicates (no existe en SQLite): `missing` ya viene
+            // filtrado en memoria, y la carrera residual cae en el catch.
+            await db.productBranchStock.createMany({
+              data: missing.map((p: any) => ({
+                productId: p.id,
+                branchId: parsedBranchId as number,
+                quantityStock: branchIsMain ? Number(p.quantityStock) || 0 : 0,
+              })),
+            });
+            const rows = await db.productBranchStock.findMany({
+              where: {
+                branchId: parsedBranchId,
+                productId: { in: missing.map((p: any) => p.id) },
+              },
+            });
+            const rowByProduct = new Map(rows.map((r: any) => [r.productId, r]));
+            products = products.map((p: any) =>
+              rowByProduct.has(p.id)
+                ? { ...p, branchStocks: [...(p.branchStocks || []), rowByProduct.get(p.id)] }
+                : p,
+            );
+          } catch (e) {
+            console.warn('[Products] backfill de stock por sucursal falló:', e);
+          }
+        }
       }
 
       // Helper para normalizar texto (pasar a minúsculas y remover acentos/diacríticos)

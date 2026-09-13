@@ -2,6 +2,11 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.15.1] - 2026-09-13
+
+### Corregido
+- **Productos y sucursales**: el filtro por sucursal excluía productos sin fila de stock (solo visibles en "Todas") y la fila pintaba 0. Ahora el filtro es inclusivo con autocurado (Principal hereda el global, resto arranca en 0), fallback a stock global, 400 ante sucursal inexistente, backfill al crear sucursales, y el selector se oculta con menos de 2 sucursales (validando el id guardado).
+
 ## [1.15.0] - 2026-09-13
 
 ### Añadido

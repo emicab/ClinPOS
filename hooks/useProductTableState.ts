@@ -57,11 +57,6 @@ export function useProductTableState() {
   }, []);
 
   useEffect(() => {
-    const activeBranchId = localStorage.getItem("clinpos_active_branch_id");
-    if (activeBranchId) {
-      setFilters((prev) => ({ ...prev, branchId: activeBranchId }));
-    }
-
     const fetchFilterOptions = async () => {
       try {
         const [brandsRes, categoriesRes, suppliersRes, branchesRes] = await Promise.all([
@@ -77,7 +72,18 @@ export function useProductTableState() {
         setCategories(await categoriesRes.json());
         setSuppliers(await suppliersRes.json());
         if (branchesRes.ok) {
-          setBranches(await branchesRes.json());
+          const list: Branch[] = await branchesRes.json();
+          setBranches(list);
+          // Validar la sucursal guardada contra la lista real: el localStorage
+          // es por PC (no por negocio) y puede traer un id de otro negocio o
+          // de una sucursal eliminada → forzar global en ese caso. Con 0-1
+          // sucursales el filtro es innecesario: siempre global.
+          const stored = localStorage.getItem("clinpos_active_branch_id");
+          const valid =
+            stored &&
+            list.length > 1 &&
+            list.some((b) => String(b.id) === String(stored));
+          setFilters((prev) => ({ ...prev, branchId: valid ? String(stored) : "" }));
         }
       } catch (err: any) {
         console.error("Filtro-Error:", err);

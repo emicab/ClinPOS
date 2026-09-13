@@ -54,7 +54,7 @@ const ProductFilters: React.FC<ProductFiltersProps> = ({
     </div>
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
       <Input name="search" placeholder="Buscar por nombre o SKU..." value={filters.search} onChange={onChange} />
-      {branches && branches.length > 0 && (
+      {branches && branches.length > 1 && (
         <Select name="branchId" value={filters.branchId || ""} onChange={onChange} aria-label="Filtrar por Sucursal">
           <option value="">Todas las Sucursales (Global)</option>
           {branches.map((b) => (

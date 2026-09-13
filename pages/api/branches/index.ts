@@ -58,6 +58,25 @@ export default async function handler(
         },
       });
 
+      // La sucursal nueva arranca en 0 para los productos existentes (sin esto,
+      // el filtro por sucursal los excluiría por falta de fila).
+      try {
+        const existing = await (prisma as any).product.findMany({ select: { id: true } });
+        if (existing.length > 0) {
+          // Sin skipDuplicates (no existe en SQLite): la sucursal es recién
+          // creada, no puede haber filas previas; la carrera cae en el catch.
+          await (prisma as any).productBranchStock.createMany({
+            data: existing.map((p: any) => ({
+              productId: p.id,
+              branchId: newBranch.id,
+              quantityStock: 0,
+            })),
+          });
+        }
+      } catch (e) {
+        console.warn('[Branches] backfill inicial de stock falló:', e);
+      }
+
       try {
         const { runSupabaseSync } = await import('../../../lib/syncService');
         runSupabaseSync(true).catch(() => {});
