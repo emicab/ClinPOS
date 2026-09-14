@@ -2,6 +2,16 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.16.0] - 2026-09-14
+
+### Añadido
+- **Alerta temprana de stock en el carrito**: la fila se marca en rojo con "¡Solo hay X!" cuando la cantidad supera el disponible, antes de cobrar.
+- **Reponer en 1 click**: click en un producto sin stock (accesos rápidos/pills) → Compras con el producto preseleccionado.
+- **Cierre de caja con diferencia en vivo**: esperado total + esperado en efectivo + diferencia calculada al tipear; Notas obligatorias si supera $1.000.
+- **KPIs del día en el Home**: ventas, ticket promedio, caja abierta y bajo stock (nuevo `GET /api/dashboard/today`).
+- **Badge de sync en el Sidebar**: pendientes / al día / sin conexión.
+- **Mensajes de error reales** en 9 handlers (sucursales, pairing, visibilidad, geocode, alertas, recetario, pedidos).
+
 ## [1.15.2] - 2026-09-13
 
 ### Corregido

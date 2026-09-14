@@ -507,7 +507,7 @@ dependencies = [
 
 [[package]]
 name = "clinpos"
-version = "1.15.2"
+version = "1.16.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
