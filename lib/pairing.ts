@@ -63,7 +63,16 @@ export async function validatePairingCode(
   );
 
   if (!res.ok) {
-    throw new Error("No se pudo validar el código contra la nube. Revisá la conexión.");
+    const detail: any = await res.json().catch(() => null);
+    const hint =
+      res.status === 401 || res.status === 403
+        ? "Revisá las credenciales/RLS en Supabase."
+        : res.status === 402
+          ? "Cuota de Supabase agotada."
+          : "Revisá la conexión.";
+    throw new Error(
+      `No se pudo validar el código contra la nube (HTTP ${res.status}${detail?.message ? `: ${detail.message}` : ""}). ${hint}`
+    );
   }
 
   const rows = await res.json();
@@ -88,7 +97,10 @@ export async function validatePairingCode(
     }
   );
   if (!claimRes.ok) {
-    throw new Error("No se pudo confirmar el código. Intentá de nuevo.");
+    const detail: any = await claimRes.json().catch(() => null);
+    throw new Error(
+      `No se pudo confirmar el código (HTTP ${claimRes.status}${detail?.message ? `: ${detail.message}` : ""}). Intentá de nuevo.`
+    );
   }
 
   let branchName: string | null = null;

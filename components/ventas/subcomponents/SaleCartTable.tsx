@@ -6,9 +6,10 @@ import { formatCurrency } from "@/lib/formatCurrency";
 interface QuantityInputProps {
   item: SaleItemInCart;
   onChange: (tempId: number, field: "quantity", value: string) => void;
+  invalid?: boolean;
 }
 
-const QuantityInput: React.FC<QuantityInputProps> = ({ item, onChange }) => {
+const QuantityInput: React.FC<QuantityInputProps> = ({ item, onChange, invalid }) => {
   const [localValue, setLocalValue] = useState(String(item.quantity));
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -39,7 +40,11 @@ const QuantityInput: React.FC<QuantityInputProps> = ({ item, onChange }) => {
       value={localValue}
       onChange={(e) => handleChange(e.target.value)}
       onBlur={handleBlur}
-      className="w-16 text-center border border-border rounded-lg px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 focus:ring-primary font-mono font-medium"
+      className={`w-16 text-center border rounded-lg px-2 py-1 text-sm bg-background focus:outline-none focus:ring-1 font-mono font-medium ${
+        invalid
+          ? "border-destructive ring-1 ring-destructive/50 text-destructive"
+          : "border-border focus:ring-primary"
+      }`}
     />
   );
 };
@@ -108,10 +113,19 @@ export const SaleCartTable: React.FC<SaleCartTableProps> = ({
               </tr>
             </thead>
             <tbody className="divide-y divide-border text-sm">
-              {items.map((item) => (
+              {items.map((item) => {
+                // Alerta temprana: la cantidad supera el disponible → el cobro
+                // rebotaría recién al completar. Se avisa acá, en el carrito.
+                const overStock =
+                  item.availableStock !== undefined &&
+                  item.availableStock !== null &&
+                  Number(item.quantity) > Number(item.availableStock);
+                return (
                 <tr
                   key={item.tempId}
-                  className="hover:bg-muted/40 transition-colors"
+                  className={`transition-colors ${
+                    overStock ? "bg-destructive/5 hover:bg-destructive/10" : "hover:bg-muted/40"
+                  }`}
                 >
                   <td className="p-3 font-semibold text-foreground align-middle">
                     <div
@@ -127,12 +141,18 @@ export const SaleCartTable: React.FC<SaleCartTableProps> = ({
                         : item.unitType === "VOLUME"
                           ? " L"
                           : " u"}
+                      {overStock && (
+                        <span className="text-destructive font-bold">
+                          {" "}· ¡Solo hay {item.availableStock}!
+                        </span>
+                      )}
                     </span>
                   </td>
                   <td className="p-3 text-center align-middle">
                     <QuantityInput
                       item={item}
                       onChange={handleItemDetailChange}
+                      invalid={overStock}
                     />
                   </td>
                   <td className="p-3 text-right align-middle">
@@ -165,7 +185,8 @@ export const SaleCartTable: React.FC<SaleCartTableProps> = ({
                     </button>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

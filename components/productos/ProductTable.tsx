@@ -225,7 +225,10 @@ const ProductTable = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isPublicWeb }),
       });
-      if (!res.ok) throw new Error("No se pudo actualizar visibilidad.");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "No se pudo actualizar visibilidad.");
+      }
       fetchProducts(page);
       toast.success(
         isPublicWeb ? "Publicado en ClinStore" : "Oculto de ClinStore",
@@ -248,9 +251,14 @@ const ProductTable = () => {
   const handleManualSync = async () => {
     setIsSyncing(true);
     try {
-      const res = await fetch("/api/sync/manual-trigger", { method: "POST" });
-      if (!res.ok) throw new Error("No se pudo iniciar la sincronización.");
-      toast.success("Sincronización iniciada en segundo plano.");
+      const res = await fetch("/api/sync", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok)
+        throw new Error(
+          data.message || "No se pudo iniciar la sincronización.",
+        );
+      toast.success(data.message || "Sincronización realizada con éxito.");
+      fetchProducts(page);
     } catch (err: any) {
       toast.error(err.message || "Error al sincronizar.");
     } finally {

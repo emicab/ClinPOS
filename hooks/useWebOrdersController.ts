@@ -185,7 +185,10 @@ export function useWebOrdersController() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ branchId }),
       });
-      if (!res.ok) throw new Error("No se pudo asignar la sucursal.");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "No se pudo asignar la sucursal.");
+      }
       toast.success("Sucursal asignada al pedido.");
       fetchOrders();
     } catch (err: any) {

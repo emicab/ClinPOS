@@ -259,7 +259,10 @@ export default function ConfigTiendaWebTab() {
       const res = await fetch(
         `/api/geocode?q=${encodeURIComponent(storeAddress.trim())}`,
       );
-      if (!res.ok) throw new Error("No se pudo geolocalizar la dirección.");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "No se pudo geolocalizar la dirección.");
+      }
       const data = await res.json();
       if (!data.lat || !data.lng) {
         throw new Error("No se encontró la dirección. Revisá el texto.");

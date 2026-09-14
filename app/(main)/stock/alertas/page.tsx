@@ -294,7 +294,10 @@ export default function StockAlertasPage() {
       } else {
         // --- 2. Agregar a orden de compra existente ---
         const getRes = await fetch(`/api/compras/${activeOrder.id}`);
-        if (!getRes.ok) throw new Error("No se pudo obtener el pedido activo.");
+        if (!getRes.ok) {
+          const data = await getRes.json().catch(() => ({}));
+          throw new Error(data.message || "No se pudo obtener el pedido activo.");
+        }
         const currentPurchase = await getRes.json();
 
         const existingItems = (currentPurchase.items || []).map(
@@ -374,7 +377,10 @@ export default function StockAlertasPage() {
     setLoading(true);
     try {
       const getRes = await fetch(`/api/compras/${activeOrder.id}`);
-      if (!getRes.ok) throw new Error("No se pudo obtener el pedido activo.");
+      if (!getRes.ok) {
+        const data = await getRes.json().catch(() => ({}));
+        throw new Error(data.message || "No se pudo obtener el pedido activo.");
+      }
       const currentPurchase = await getRes.json();
 
       const itemsList = (currentPurchase.items || []).map((item: any) => ({

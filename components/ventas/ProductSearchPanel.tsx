@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "motion/react";
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
@@ -45,7 +46,9 @@ const ProductSearchPanel: React.FC<ProductSearchPanelProps> = ({
   onCurrentItemFieldChange,
   onAddItem,
   onClearCurrentItem,
-}) => (
+}) => {
+  const router = useRouter();
+  return (
   <fieldset className="border border-border p-4 rounded-md">
     <legend className="text-lg font-medium text-primary px-2">Producto</legend>
     <div className="relative mb-2">
@@ -108,7 +111,12 @@ const ProductSearchPanel: React.FC<ProductSearchPanelProps> = ({
                   type="button"
                   whileHover={{ scale: 1.03, y: -1 }}
                   whileTap={{ scale: 0.97 }}
-                  onClick={() => onSelectProduct(p)}
+                  onClick={() =>
+                    p.quantityStock <= 0
+                      ? router.push(`/compras/nueva?productId=${p.id}`)
+                      : onSelectProduct(p)
+                  }
+                  title={p.quantityStock <= 0 ? "Sin stock — click para reponer en Compras" : undefined}
                   className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors cursor-pointer ${p.quantityStock <= 0 ? "border-destructive/40 text-destructive hover:bg-destructive/10" : "border-primary/30 text-primary hover:bg-primary/10"}`}
                 >
                   {p.isRecipe && (
@@ -273,6 +281,7 @@ const ProductSearchPanel: React.FC<ProductSearchPanelProps> = ({
       )}
     </AnimatePresence>
   </fieldset>
-);
+  );
+};
 
 export default ProductSearchPanel;

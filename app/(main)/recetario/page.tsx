@@ -126,7 +126,10 @@ export default function RecetarioPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isPublicWeb: value }),
       });
-      if (!res.ok) throw new Error("No se pudo actualizar la visibilidad.");
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "No se pudo actualizar la visibilidad.");
+      }
       setRecipes((prev) =>
         prev.map((r) =>
           r.id === recipe.id ? { ...r, isPublicWeb: value } : r,

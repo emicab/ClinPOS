@@ -270,7 +270,7 @@ import { useSyncStatus } from "@/hooks/useSyncStatus";
 import { isRouteVisibleForProfile } from "@/lib/moduleCatalog";
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
-  const { online, pendingSync } = useSyncStatus();
+  const { online, pendingSync, lastSync } = useSyncStatus();
   const {
     isModuleEnabled,
     currentUser,
@@ -560,6 +560,15 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
   // Los demás roles pasan por las 3 compuertas (plan Pro, permisos, perfil).
   const isAdmin = currentUser?.role === "ADMIN";
 
+  // Texto relativo del último sync ("hace 5 min").
+  const syncAgo = (() => {
+    if (!lastSync) return "";
+    const mins = Math.max(0, Math.round((Date.now() - new Date(lastSync).getTime()) / 60000));
+    if (mins < 1) return "recién";
+    if (mins < 60) return `hace ${mins} min`;
+    return `hace ${Math.floor(mins / 60)} h`;
+  })();
+
   // Filtrar los grupos según módulos activos y rol de usuarios
   const filteredGroups = navGroups
     .map((group) => {
@@ -716,6 +725,28 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
             </div>
           </div>
         )}
+
+        <div
+          className="mx-4 mb-2 px-3 py-2 rounded-xl border border-border bg-background/50 flex items-center justify-between gap-2"
+          title={lastSync ? `Última sincronización: ${lastSync}` : "Sincronización con la nube"}
+        >
+          <span className="text-[10px] uppercase font-bold text-foreground-muted tracking-wider">
+            ☁ Nube
+          </span>
+          {!online ? (
+            <span className="text-[10px] font-bold text-foreground-muted bg-muted border border-border px-1.5 py-0.5 rounded-full">
+              sin conexión
+            </span>
+          ) : pendingSync > 0 ? (
+            <span className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded-full">
+              {pendingSync} pendientes
+            </span>
+          ) : (
+            <span className="text-[10px] font-bold text-emerald-700">
+              al día{syncAgo ? ` · ${syncAgo}` : ""}
+            </span>
+          )}
+        </div>
 
         {currentUser && (
           <div className="px-4 py-2.5 border-t border-border flex items-center justify-between text-xs bg-background/50">

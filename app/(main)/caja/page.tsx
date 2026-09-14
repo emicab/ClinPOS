@@ -47,6 +47,9 @@ const typeDisplay: Record<string, string> = {
   ADJUSTMENT: 'Ajuste',
 };
 
+// Diferencia a partir de la cual el motivo en Notas es obligatorio al cerrar.
+const DIF_UMBRAL_CIERRE = 1000;
+
 export default function CajaPage() {
   const [openRegister, setOpenRegister] = useState<Register | null>(null);
   const [history, setHistory] = useState<Register[]>([]);
@@ -105,8 +108,31 @@ export default function CajaPage() {
     }
   };
 
+  // Esperado en efectivo físico: inicial + movimientos CASH (solo ese medio
+  // se cuenta billete en mano; el resto deja rastro digital).
+  const expectedCash =
+    openRegister == null
+      ? null
+      : parseFloat(openRegister.initialBalance || '0') +
+        openRegister.movements
+          .filter((m) => m.paymentType === 'CASH')
+          .reduce((s, m) => s + parseFloat(m.amount || '0'), 0);
+
+  const closeDiff =
+    openRegister == null || actualBalance === ''
+      ? null
+      : parseFloat(actualBalance) - parseFloat(openRegister.expectedBalance || '0');
+  const notesRequired =
+    closeDiff !== null && !isNaN(closeDiff) && Math.abs(closeDiff) > DIF_UMBRAL_CIERRE;
+
   const handleCloseRegister = async () => {
     if (!openRegister || !actualBalance) return;
+    if (notesRequired && !closeNotes.trim()) {
+      toast.error(
+        `La diferencia supera los ${formatCurrency(DIF_UMBRAL_CIERRE)}: escribí el motivo en Notas para cerrar la caja.`,
+      );
+      return;
+    }
     setIsSubmitting(true);
     try {
       const res = await fetch(`/api/caja/${openRegister.id}`, {
@@ -359,15 +385,32 @@ export default function CajaPage() {
           <div className="bg-muted text-foreground rounded-lg shadow-xl w-full max-w-lg m-4 p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-lg font-semibold mb-4">Cerrar Caja</h3>
             <div className="space-y-4">
-              <div className="bg-background p-3 rounded-lg">
-                <p className="text-xs text-foreground-muted">Saldo Inicial</p>
-                <p className="text-lg font-bold">{formatCurrency(openRegister.initialBalance)}</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div className="bg-background p-3 rounded-lg">
+                  <p className="text-xs text-foreground-muted">Saldo Inicial</p>
+                  <p className="text-lg font-bold">{formatCurrency(openRegister.initialBalance)}</p>
+                </div>
+                <div className="bg-background p-3 rounded-lg">
+                  <p className="text-xs text-foreground-muted">Esperado total</p>
+                  <p className="text-lg font-bold">{openRegister.expectedBalance ? formatCurrency(openRegister.expectedBalance) : '-'}</p>
+                </div>
+                <div className="bg-background p-3 rounded-lg">
+                  <p className="text-xs text-foreground-muted">Esperado en efectivo</p>
+                  <p className="text-lg font-bold">{expectedCash !== null && !isNaN(expectedCash) ? formatCurrency(expectedCash) : '-'}</p>
+                </div>
               </div>
 
               {renderDesgloseClose()}
 
               <Input label="Saldo Real en Caja ($) *" type="number" step="0.01" value={actualBalance} onChange={(e) => setActualBalance(e.target.value)} required />
-              <Input label="Notas (opcional)" type="text" value={closeNotes} onChange={(e) => setCloseNotes(e.target.value)} />
+              {closeDiff !== null && !isNaN(closeDiff) && actualBalance !== '' && (
+                <p className={`text-sm font-bold ${closeDiff === 0 ? 'text-emerald-600' : closeDiff > 0 ? 'text-amber-600' : 'text-destructive'}`}>
+                  Diferencia: {closeDiff > 0 ? '+' : ''}{formatCurrency(closeDiff)}
+                  {closeDiff !== 0 && ' (esperado vs real)'}
+                  {closeDiff === 0 && ' — caja cuadrada ✔'}
+                </p>
+              )}
+              <Input label={notesRequired ? 'Notas (obligatorio por diferencia) *' : 'Notas (opcional)'} type="text" value={closeNotes} onChange={(e) => setCloseNotes(e.target.value)} />
             </div>
             <div className="flex justify-end gap-2 mt-6">
               <Button type="button" variant="outline" onClick={() => setShowCloseModal(false)} disabled={isSubmitting}>Cancelar</Button>

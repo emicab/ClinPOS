@@ -139,9 +139,10 @@ export default function ConfigSucursalesTab() {
         body: JSON.stringify({ branchId }),
       });
       if (!resDev.ok) {
-        throw new Error("No se pudo guardar el local en el servidor.");
+        const data = await resDev.json().catch(() => ({}));
+        throw new Error(data.message || "No se pudo guardar el local en el servidor.");
       }
-    } catch {
+    } catch (err: any) {
       setActiveBranchId(prev);
       if (prev) {
         localStorage.setItem("clinpos_active_branch_id", String(prev));
@@ -149,7 +150,7 @@ export default function ConfigSucursalesTab() {
         localStorage.removeItem("clinpos_active_branch_id");
       }
       toast.error(
-        "No se pudo guardar el local en esta PC. Revisá tu conexión y el plan Pro.",
+        err?.message || "No se pudo guardar el local en esta PC. Revisá tu conexión y el plan Pro.",
       );
       return;
     }

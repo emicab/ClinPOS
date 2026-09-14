@@ -1,7 +1,9 @@
 "use client";
 
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { useModules } from "@/hooks/useModules";
+import { formatCurrency } from "@/lib/formatCurrency";
 import {
   ArrowUpRightSquare,
   History,
@@ -297,10 +299,27 @@ const SecondaryNavCard = ({
   </Link>
 );
 
+interface TodayKpis {
+  salesToday: { count: number; total: number } | null;
+  ticketAvg: number | null;
+  lowStock: number | null;
+  cashOpen: { expected: number } | null;
+}
+
 export default function HomePage() {
   const { isModuleEnabled, currentUser } = useModules();
   // El ADMIN ve todos los accesos sin filtros de módulos ni roles.
   const isAdmin = currentUser?.role === "ADMIN";
+  const [kpis, setKpis] = useState<TodayKpis | null>(null);
+
+  useEffect(() => {
+    fetch("/api/dashboard/today")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data) setKpis(data);
+      })
+      .catch(() => {});
+  }, []);
 
   const filteredPriorityModules = priorityModules.filter((mod) => {
     if (isAdmin) return true;
@@ -342,6 +361,71 @@ export default function HomePage() {
         </header>
 
         <main className="space-y-10 pb-10">
+          {kpis && (
+            <section aria-label="Resumen del día">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <Link
+                  href="/ventas"
+                  className="rounded-2xl border border-border bg-white p-4 shadow-sm hover:shadow-md hover:border-primary/50 transition-all"
+                >
+                  <p className="text-[11px] uppercase font-bold text-foreground-muted tracking-wider">
+                    Ventas hoy
+                  </p>
+                  <p className="text-xl font-extrabold text-foreground mt-1">
+                    {kpis.salesToday ? formatCurrency(kpis.salesToday.total) : "—"}
+                  </p>
+                  <p className="text-xs text-foreground-muted mt-0.5">
+                    {kpis.salesToday ? `${kpis.salesToday.count} ventas` : "sin datos"}
+                    {kpis.ticketAvg !== null && kpis.salesToday && kpis.salesToday.count > 0
+                      ? ` · ticket ${formatCurrency(kpis.ticketAvg)}`
+                      : ""}
+                  </p>
+                </Link>
+                <Link
+                  href="/caja"
+                  className="rounded-2xl border border-border bg-white p-4 shadow-sm hover:shadow-md hover:border-primary/50 transition-all"
+                >
+                  <p className="text-[11px] uppercase font-bold text-foreground-muted tracking-wider">
+                    Caja abierta
+                  </p>
+                  <p className="text-xl font-extrabold text-foreground mt-1">
+                    {kpis.cashOpen ? formatCurrency(kpis.cashOpen.expected) : "Cerrada"}
+                  </p>
+                  <p className="text-xs text-foreground-muted mt-0.5">
+                    {kpis.cashOpen ? "esperado en caja" : "sin caja abierta"}
+                  </p>
+                </Link>
+                <Link
+                  href="/stock/alertas"
+                  className="rounded-2xl border border-border bg-white p-4 shadow-sm hover:shadow-md hover:border-primary/50 transition-all"
+                >
+                  <p className="text-[11px] uppercase font-bold text-foreground-muted tracking-wider">
+                    Bajo stock
+                  </p>
+                  <p className={`text-xl font-extrabold mt-1 ${kpis.lowStock !== null && kpis.lowStock > 0 ? "text-destructive" : "text-foreground"}`}>
+                    {kpis.lowStock !== null ? kpis.lowStock : "—"}
+                  </p>
+                  <p className="text-xs text-foreground-muted mt-0.5">
+                    productos para reponer
+                  </p>
+                </Link>
+                <Link
+                  href="/pedidos-web"
+                  className="rounded-2xl border border-border bg-white p-4 shadow-sm hover:shadow-md hover:border-primary/50 transition-all"
+                >
+                  <p className="text-[11px] uppercase font-bold text-foreground-muted tracking-wider">
+                    Pedidos web
+                  </p>
+                  <p className="text-xl font-extrabold text-foreground mt-1">
+                    Ver
+                  </p>
+                  <p className="text-xs text-foreground-muted mt-0.5">
+                    preparar y despachar
+                  </p>
+                </Link>
+              </div>
+            </section>
+          )}
           <section id="quick-access">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-xl font-semibold text-foreground px-1">

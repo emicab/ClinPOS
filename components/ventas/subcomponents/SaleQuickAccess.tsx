@@ -1,4 +1,5 @@
 import React from "react";
+import { useRouter } from "next/navigation";
 import { Package, Loader2, Plus } from "lucide-react";
 import { Product } from "@/types";
 import { formatCurrency } from "@/lib/formatCurrency";
@@ -17,6 +18,7 @@ export const SaleQuickAccess: React.FC<SaleQuickAccessProps> = ({
   categoryProducts,
   handleSelectProduct,
 }) => {
+  const router = useRouter();
   const displayProducts = recentProducts.length > 0 ? recentProducts : categoryProducts;
 
   return (
@@ -47,11 +49,15 @@ export const SaleQuickAccess: React.FC<SaleQuickAccessProps> = ({
               .filter(Boolean)
               .join(" | ") || undefined;
 
+            // Sin stock no se puede vender (el servidor lo rebotaría): el click
+            // lleva a reponer en Compras con el producto preseleccionado.
+            const goReplenish = () => router.push(`/compras/nueva?productId=${prod.id}`);
             return (
               <button
                 key={prod.id}
                 type="button"
-                onClick={() => handleSelectProduct(prod)}
+                onClick={() => (isOutOfStock ? goReplenish() : handleSelectProduct(prod))}
+                title={isOutOfStock ? "Sin stock — click para reponer en Compras" : title}
                 className={`flex flex-col justify-between p-2.5 rounded-xl text-left shadow-sm hover:shadow-md transition-all active:scale-[0.96] cursor-pointer min-h-[85px] border ${
                   isOutOfStock
                     ? "bg-red-50/40 hover:bg-red-100/30 border-red-200 hover:border-red-300/80 opacity-80"
@@ -59,7 +65,6 @@ export const SaleQuickAccess: React.FC<SaleQuickAccessProps> = ({
                     ? "bg-amber-50/40 hover:bg-amber-100/30 border-amber-200 hover:border-amber-300/80"
                     : "bg-muted hover:bg-white border-transparent hover:border-primary/50"
                 }`}
-                title={title}
               >
                 <span
                   className={`text-[10px] font-bold line-clamp-2 leading-tight ${
