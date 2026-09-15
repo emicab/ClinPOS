@@ -14,6 +14,7 @@ export async function POST(req: Request) {
     let successCount = 0;
     let updateCount = 0;
     let errorCount = 0;
+    const unlinkedSuppliers: string[] = [];
 
     for (const productData of products) {
       try {
@@ -27,6 +28,7 @@ export async function POST(req: Request) {
           stockMinAlert,
           brandName,
           categoryName,
+          supplierName,
         } = productData;
 
         // Find or create Brand (case-insensitive approximation by using toLowerCase in SQL if needed, but SQLite is tricky. We'll just do exact match for now and fallback)
@@ -61,6 +63,20 @@ export async function POST(req: Request) {
             if (!category) category = await prisma.category.create({ data: { name: 'General' }});
         }
 
+        // Proveedor: solo vincular si ya existe. Nunca se crea desde el
+        // importador; si no existe, el producto queda sin proveedor y se
+        // reporta en la respuesta.
+        let supplier = null;
+        const supplierLabel = typeof supplierName === 'string' ? supplierName.trim() : '';
+        if (supplierLabel) {
+            supplier = await prisma.supplier.findFirst({
+              where: { name: supplierLabel }
+            });
+            if (!supplier && !unlinkedSuppliers.includes(supplierLabel)) {
+                unlinkedSuppliers.push(supplierLabel);
+            }
+        }
+
         // Prepare product object
         const productPayload: Prisma.ProductCreateInput = {
             name,
@@ -72,6 +88,7 @@ export async function POST(req: Request) {
             stockMinAlert: stockMinAlert ? Number(stockMinAlert) : null,
             brand: { connect: { id: brand.id } },
             category: { connect: { id: category.id } },
+            ...(supplier ? { supplier: { connect: { id: supplier.id } } } : {}),
         };
 
         if (sku) {
@@ -87,12 +104,15 @@ export async function POST(req: Request) {
                         description: description || null,
                         pricePurchase: pricePurchase ? Number(pricePurchase) : 0,
                         priceSale: Number(priceSale),
-                        // Ojo: Sobre-escribimos el stock con el valor del CSV. 
+                        // Ojo: Sobre-escribimos el stock con el valor del CSV.
                         // Si quisieras sumar, sería: quantityStock: { increment: Number(quantityStock) }
                         quantityStock: Number(quantityStock),
                         stockMinAlert: stockMinAlert ? Number(stockMinAlert) : null,
                         brand: { connect: { id: brand.id } },
                         category: { connect: { id: category.id } },
+                        // Solo se vincula el proveedor si existe; si el CSV no
+                        // trae uno válido no se toca el actual.
+                        ...(supplier ? { supplier: { connect: { id: supplier.id } } } : {}),
                     }
                 });
                 updateCount++;
@@ -115,7 +135,8 @@ export async function POST(req: Request) {
         successCount,
         updateCount,
         errorCount,
-        message: `Importación finalizada.\nCreados: ${successCount}\nActualizados: ${updateCount}\nErrores: ${errorCount}`
+        unlinkedSuppliers,
+        message: `Importación finalizada.\nCreados: ${successCount}\nActualizados: ${updateCount}\nErrores: ${errorCount}${unlinkedSuppliers.length > 0 ? `\nSin proveedor (no existe): ${unlinkedSuppliers.length}` : ''}`
     }, { status: 200 });
 
   } catch (error: any) {

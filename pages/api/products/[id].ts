@@ -281,6 +281,9 @@ export default async function handler(
     }
   } else if (req.method === 'DELETE') {
     try {
+      // Borrado forzado (doble verificación del frontend): elimina en cascada
+      // todas las dependencias. Se acepta por body o query (?force=true).
+      const isForce = req.body?.force === true || req.query.force === 'true';
       const [saleItemsCount, purchaseItemsCount, comboItemsCount, promotionConditionsCount, activeConsignmentItemsCount, stockTransferItemsCount] = await Promise.all([
         prisma.saleItem.count({ where: { productId: id } }),
         prisma.purchaseItem.count({ where: { productId: id } }),
@@ -304,14 +307,17 @@ export default async function handler(
       if (activeConsignmentItemsCount > 0) relations.push(`${activeConsignmentItemsCount} ítem(s) de consignación activa`);
       if (stockTransferItemsCount > 0) relations.push(`${stockTransferItemsCount} ítem(s) de traspaso de stock`);
 
-      if (relations.length > 0) {
+      if (relations.length > 0 && !isForce) {
         return res.status(409).json({
-          message: `No se puede eliminar el producto porque está asociado a ${relations.join(', ')}. Considere marcarlo como no disponible o discontinuado.`
+          message: `No se puede eliminar el producto porque está asociado a ${relations.join(', ')}. Considere marcarlo como no disponible o discontinuado.`,
+          canForce: true,
+          relations,
         });
       }
 
-      // Pedidos web que referencian este producto. Solo se limpian automáticamente
-      // los que están PENDIENTES y NO pagados (ej. un checkout que falló).
+      // Pedidos web que referencian este producto. Sin force solo se limpian
+      // automáticamente los PENDIENTES y NO pagados (ej. un checkout fallido);
+      // con force se eliminan todos.
       const webOrderItems = await prisma.webOrderItem.findMany({
         where: { productId: id },
         select: { webOrderId: true },
@@ -328,9 +334,11 @@ export default async function handler(
         const blocked = webOrders.filter(o =>
           o.paymentStatus === "PAID" || o.status === "DELIVERED"
         );
-        if (blocked.length > 0) {
+        if (blocked.length > 0 && !isForce) {
           return res.status(409).json({
-            message: `No se puede eliminar el producto porque está asociado a pedidos web confirmados (${blocked.map(o => o.webOrderNumber).join(', ')}). Considere marcarlo como no disponible.`
+            message: `No se puede eliminar el producto porque está asociado a pedidos web confirmados (${blocked.map(o => o.webOrderNumber).join(', ')}). Considere marcarlo como no disponible.`,
+            canForce: true,
+            relations: [`pedidos web confirmados: ${blocked.map(o => o.webOrderNumber).join(', ')}`],
           });
         }
 
@@ -351,6 +359,8 @@ export default async function handler(
         ),
       ];
 
+      const deletedRelations: Record<string, number> = {};
+
       // Borrar dependencias de órdenes web pendientes y el producto (transacción atómica).
       await prisma.$transaction(async (tx) => {
         if (webOrderIds.length > 0) {
@@ -366,10 +376,81 @@ export default async function handler(
             data: { productId: null, productName: productToDelete?.name || null },
           });
         }
-        // Limpiar ítems de consignaciones CANCELADAS (no impiden el borrado).
-        await tx.consignmentItem.deleteMany({
-          where: { productId: id, consignment: { status: 'CANCELLED' } },
-        });
+        if (isForce) {
+          // Cascada total (solo tras doble verificación).
+          const purchaseRes = await tx.purchaseItem.deleteMany({ where: { productId: id } });
+          deletedRelations.purchaseItems = purchaseRes.count;
+
+          const comboIds = [...new Set((await tx.comboItem.findMany({
+            where: { productId: id }, select: { comboId: true },
+          })).map((i) => i.comboId))];
+          const comboRes = await tx.comboItem.deleteMany({ where: { productId: id } });
+          deletedRelations.comboItems = comboRes.count;
+          if (comboIds.length > 0) {
+            const orphanCombos = await tx.combo.findMany({
+              where: { id: { in: comboIds }, items: { none: {} } }, select: { id: true },
+            });
+            if (orphanCombos.length > 0) {
+              await tx.combo.deleteMany({ where: { id: { in: orphanCombos.map((c) => c.id) } } });
+              deletedRelations.combosDeleted = orphanCombos.length;
+            }
+          }
+
+          const promoIds = [...new Set((await tx.promotionCondition.findMany({
+            where: { productId: id }, select: { promotionId: true },
+          })).map((c) => c.promotionId))];
+          const promoRes = await tx.promotionCondition.deleteMany({ where: { productId: id } });
+          deletedRelations.promotionConditions = promoRes.count;
+          if (promoIds.length > 0) {
+            const orphanPromos = await tx.promotion.findMany({
+              where: { id: { in: promoIds }, conditions: { none: {} } }, select: { id: true },
+            });
+            if (orphanPromos.length > 0) {
+              await tx.promotion.deleteMany({ where: { id: { in: orphanPromos.map((p) => p.id) } } });
+              deletedRelations.promotionsDeleted = orphanPromos.length;
+            }
+          }
+
+          const consignmentIds = [...new Set((await tx.consignmentItem.findMany({
+            where: { productId: id }, select: { consignmentId: true },
+          })).map((i) => i.consignmentId))];
+          const consignmentRes = await tx.consignmentItem.deleteMany({ where: { productId: id } });
+          deletedRelations.consignmentItems = consignmentRes.count;
+          if (consignmentIds.length > 0) {
+            const orphanConsignments = await tx.consignment.findMany({
+              where: { id: { in: consignmentIds }, items: { none: {} } }, select: { id: true },
+            });
+            if (orphanConsignments.length > 0) {
+              await tx.consignment.deleteMany({ where: { id: { in: orphanConsignments.map((c) => c.id) } } });
+              deletedRelations.consignmentsDeleted = orphanConsignments.length;
+            }
+          }
+
+          const transferIds = [...new Set((await tx.stockTransferItem.findMany({
+            where: { productId: id }, select: { transferId: true },
+          })).map((i) => i.transferId))];
+          const transferRes = await tx.stockTransferItem.deleteMany({ where: { productId: id } });
+          deletedRelations.stockTransferItems = transferRes.count;
+          if (transferIds.length > 0) {
+            const orphanTransfers = await tx.stockTransfer.findMany({
+              where: { id: { in: transferIds }, items: { none: {} } }, select: { id: true },
+            });
+            if (orphanTransfers.length > 0) {
+              await tx.stockTransfer.deleteMany({ where: { id: { in: orphanTransfers.map((t) => t.id) } } });
+              deletedRelations.transfersDeleted = orphanTransfers.length;
+            }
+          }
+
+          await tx.productModifierOption.updateMany({
+            where: { ingredientId: id },
+            data: { ingredientId: null },
+          });
+        } else {
+          // Limpiar ítems de consignaciones CANCELADAS (no impiden el borrado).
+          await tx.consignmentItem.deleteMany({
+            where: { productId: id, consignment: { status: 'CANCELLED' } },
+          });
+        }
         await tx.productBranchStock.deleteMany({ where: { productId: id } });
         // Quitar el producto de las recetas que lo usan como ingrediente.
         await tx.recipeItem.deleteMany({ where: { ingredientId: id } });
@@ -392,7 +473,21 @@ export default async function handler(
       } catch (enqErr) {
         console.error("[Productos] Error al encolar borrado:", enqErr);
       }
-      
+
+      if (isForce) {
+        deletedRelations.webOrders = webOrderNumbersToDelete.length;
+        const detail = Object.entries(deletedRelations)
+          .filter(([, v]) => v > 0)
+          .map(([k, v]) => `${v} ${k}`)
+          .join(', ');
+        res.status(200).json({
+          message: `Producto eliminado con borrado forzado${detail ? ` (también se eliminó: ${detail})` : ''}.`,
+          forced: true,
+          deletedRelations,
+        });
+        return;
+      }
+
       res.status(204).end();
     } catch (error: any) {
       handleApiError(res, error, `deleting product ${id}`);

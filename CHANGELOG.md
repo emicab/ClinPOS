@@ -2,6 +2,17 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.16.2] - 2026-09-15
+
+### Añadido
+- **Columna PROVEEDOR en el importador CSV**: automapeo y vinculación solo si el proveedor ya existe; si no, el producto queda sin proveedor y se reporta.
+- **SKU en notación científica**: los códigos que Excel exporta como `1.11E+11` se expanden con aviso de posible redondeo.
+- **Borrado forzado con doble verificación**: ante productos vinculados (compras, combos, promociones, consignaciones, traspasos, pedidos web), segundo modal con confirmación explícita que elimina todo en cascada.
+
+### Corregido
+- **"Seleccionar TODOS" solo borraba 20**: desajuste `isAllPagesSelected` vs `allPages` entre frontend y `batch-delete`.
+- **Edición masiva y visibilidad web masiva** apuntaban a endpoints inexistentes (`batch-update`, `batch-web-status`); ahora usan `/api/products/batch`.
+
 ## [1.16.0] - 2026-09-14
 
 ### Añadido

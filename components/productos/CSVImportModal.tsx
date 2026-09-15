@@ -21,6 +21,7 @@ const SYSTEM_FIELDS = [
   { key: "stockMinAlert", label: "Alerta Stock Mínimo", required: false },
   { key: "brandName", label: "Marca", required: false },
   { key: "categoryName", label: "Categoría / Rubro", required: false },
+  { key: "supplierName", label: "Proveedor", required: false },
 ];
 
 const readFileContent = (file: File): Promise<string> =>
@@ -38,6 +39,25 @@ const readFileContent = (file: File): Promise<string> =>
     reader.onerror = () => reject(reader.error);
     reader.readAsArrayBuffer(file);
   });
+
+/**
+ * Normaliza un SKU preservándolo como texto.
+ * Si Excel exportó el código en notación científica (ej. "1.11111E+11"),
+ * lo expande a entero y avisa que el valor pudo perder precisión
+ * (Excel redondea los dígitos al exportar así).
+ * Devuelve { value, expanded } donde expanded indica que hubo conversión.
+ */
+const sanitizeSku = (raw: string): { value: string; expanded: boolean } => {
+  const value = raw.trim();
+  if (!value) return { value: "", expanded: false };
+  if (/^\d+(\.\d+)?[eE][+-]?\d+$/.test(value)) {
+    const num = Number(value);
+    if (Number.isFinite(num)) {
+      return { value: num.toFixed(0), expanded: true };
+    }
+  }
+  return { value, expanded: false };
+};
 
 const sanitizeNumeric = (raw: string): string => {
   let value = raw.trim().replace(/\s+/g, "").replace(/[^0-9.,-]/g, "");
@@ -146,6 +166,9 @@ const CSVImportModal: React.FC<CSVImportModalProps> = ({
         case "categoryName":
           matched = findHeader(["categoría", "categoria", "rubro"]);
           break;
+        case "supplierName":
+          matched = findHeader(["proveedor", "supplier"]);
+          break;
       }
       if (matched) initialMapping[field.key] = matched;
     });
@@ -173,6 +196,7 @@ const CSVImportModal: React.FC<CSVImportModalProps> = ({
     setIsProcessing(true);
 
     // Transform data
+    let skuExpandedCount = 0;
     const productsToImport = csvData
       .map((row) => {
         const product: any = {};
@@ -180,6 +204,14 @@ const CSVImportModal: React.FC<CSVImportModalProps> = ({
           const csvCol = mapping[field.key];
           if (csvCol && row[csvCol] !== undefined) {
             let value = String(row[csvCol]).trim();
+
+            // El SKU se preserva como texto; si viene en notación
+            // científica (exportado por Excel) se expande con aviso.
+            if (field.key === "sku") {
+              const sanitized = sanitizeSku(value);
+              value = sanitized.value;
+              if (sanitized.expanded) skuExpandedCount++;
+            }
 
             // Sanear números: normalizar separador decimal (coma -> punto) y quitar separadores de miles
             if (
@@ -214,6 +246,21 @@ const CSVImportModal: React.FC<CSVImportModalProps> = ({
       }
 
       toast.success(result.message, { duration: 5000 });
+      if (skuExpandedCount > 0) {
+        toast(
+          `${skuExpandedCount} SKU(s) venían en notación científica (ej. 1.11E+11) y se expandieron. Verificá que coincidan: Excel pudo haber redondeado los dígitos. Para evitarlo, formateá la columna como Texto antes de exportar.`,
+          { duration: 8000 },
+        );
+      }
+      if (
+        Array.isArray(result.unlinkedSuppliers) &&
+        result.unlinkedSuppliers.length > 0
+      ) {
+        toast(
+          `${result.unlinkedSuppliers.length} producto(s) quedaron sin proveedor porque no existe en el sistema: ${result.unlinkedSuppliers.slice(0, 5).join(", ")}${result.unlinkedSuppliers.length > 5 ? "…" : ""}`,
+          { duration: 8000 },
+        );
+      }
       onSuccess();
       handleClose();
     } catch (err: any) {

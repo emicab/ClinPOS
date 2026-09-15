@@ -1,11 +1,12 @@
 "use client";
 
-import React from "react";
+import React, { useState } from "react";
 import type { Product } from "@/types";
 import { Loader2, AlertCircle } from "lucide-react";
 import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import { useModules } from "@/hooks/useModules";
+import Button from "@/components/ui/Button";
 import ConfirmationModal from "../ui/ConfirmationModal";
 import Pagination from "@/components/ui/Pagination";
 import { useProductCSV } from "@/hooks/useProductCSV";
@@ -89,6 +90,19 @@ const ProductTable = () => {
     setIsModalOpen(true);
   };
 
+  // Doble verificación para borrado forzado: cuando el backend responde 409
+  // con canForce, se abre un segundo modal que exige tildar la advertencia.
+  const [forceDeleteTarget, setForceDeleteTarget] = useState<null | {
+    mode: "single" | "batch";
+    message: string;
+  }>(null);
+  const [forceAcknowledge, setForceAcknowledge] = useState(false);
+
+  const closeForceModal = () => {
+    setForceDeleteTarget(null);
+    setForceAcknowledge(false);
+  };
+
   const handleConfirmDelete = async () => {
     if (!itemToDelete) return;
     setIsDeleting(true);
@@ -98,6 +112,16 @@ const ProductTable = () => {
       });
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        if (response.status === 409 && errorData.canForce) {
+          setIsModalOpen(false);
+          setForceAcknowledge(false);
+          setForceDeleteTarget({
+            mode: "single",
+            message:
+              errorData.message || "El producto está vinculado a otros datos.",
+          });
+          return;
+        }
         throw new Error(
           errorData.message || `Error HTTP: ${response.status}`,
         );
@@ -105,6 +129,36 @@ const ProductTable = () => {
       toast.success("Producto eliminado correctamente");
       setIsModalOpen(false);
       setItemToDelete(null);
+      fetchProducts(page);
+    } catch (err: any) {
+      toast.error(err.message || "Error al eliminar el producto.");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleForceConfirm = async () => {
+    if (!forceDeleteTarget || !forceAcknowledge) return;
+    if (forceDeleteTarget.mode === "batch") {
+      await doBatchDelete(true);
+      closeForceModal();
+      return;
+    }
+    if (!itemToDelete) return;
+    setIsDeleting(true);
+    try {
+      const response = await fetch(`/api/products/${itemToDelete.id}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: true }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.message || `Error HTTP: ${response.status}`);
+      }
+      toast.success(data.message || "Producto eliminado correctamente");
+      setItemToDelete(null);
+      closeForceModal();
       fetchProducts(page);
     } catch (err: any) {
       toast.error(err.message || "Error al eliminar el producto.");
@@ -167,7 +221,7 @@ const ProductTable = () => {
     setIsAllPagesSelected(false);
   };
 
-  const handleBatchDelete = async () => {
+  const doBatchDelete = async (force: boolean) => {
     setIsBatchDeleting(true);
     try {
       const res = await fetch("/api/products/batch-delete", {
@@ -175,33 +229,61 @@ const ProductTable = () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ids: Array.from(selectedIds),
+          allPages: isAllPagesSelected,
+          // Alias por compatibilidad con el backend.
           isAllPagesSelected,
           filters: isAllPagesSelected ? filters : undefined,
+          force,
         }),
       });
-      if (!res.ok) throw new Error("Error al eliminar los productos.");
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 409 && !force && data.canForce) {
+          // Hay vínculos: se abre la doble verificación en vez de fallar.
+          const conflict: any = new Error(
+            data.message || "Productos vinculados.",
+          );
+          conflict.isConflict = true;
+          throw conflict;
+        }
+        throw new Error(data.message || "Error al eliminar los productos.");
+      }
       toast.success(
-        `Se eliminaron ${data.deletedCount || selectedIds.size} productos.`,
+        data.message ||
+          `Se eliminaron ${data.deletedCount ?? data.count ?? selectedIds.size} productos.`,
+        { duration: 6000 },
       );
       setIsBatchDeleteOpen(false);
       handleClearSelection();
       fetchProducts(page);
     } catch (err: any) {
+      if (!force && err?.isConflict) {
+        setIsBatchDeleteOpen(false);
+        setForceAcknowledge(false);
+        setForceDeleteTarget({
+          mode: "batch",
+          message: err.message || "Productos vinculados.",
+        });
+        return;
+      }
       toast.error(err.message || "Error al eliminar en lote.");
     } finally {
       setIsBatchDeleting(false);
     }
   };
 
+  // Sin argumentos: el ConfirmationModal inyecta el evento click y no debe
+  // interpretarse como flag de borrado forzado.
+  const handleBatchDelete = () => doBatchDelete(false);
+
   const handleBatchWebStatus = async (isPublicWeb: boolean) => {
     try {
-      const res = await fetch("/api/products/batch-web-status", {
+      const res = await fetch("/api/products/batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ids: Array.from(selectedIds),
-          isAllPagesSelected,
+          allPages: isAllPagesSelected,
           filters: isAllPagesSelected ? filters : undefined,
           isPublicWeb,
         }),
@@ -209,7 +291,7 @@ const ProductTable = () => {
       if (!res.ok) throw new Error("Error al actualizar estado en tienda web.");
       const data = await res.json();
       toast.success(
-        `Se actualizaron ${data.updatedCount || selectedIds.size} productos.`,
+        `Se actualizaron ${data.count || selectedIds.size} productos.`,
       );
       handleClearSelection();
       fetchProducts(page);
@@ -295,6 +377,60 @@ const ProductTable = () => {
         {`¿Eliminar los ${isAllPagesSelected ? totalProducts : selectedIds.size} productos seleccionados?`}
       </ConfirmationModal>
 
+      {forceDeleteTarget && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-muted text-foreground rounded-lg shadow-xl w-full max-w-md p-6">
+            <h3 className="text-lg font-semibold text-destructive mb-2">
+              Borrado forzado: última confirmación
+            </h3>
+            <p className="text-sm text-foreground-muted mb-3">
+              {forceDeleteTarget.message}
+            </p>
+            <div className="text-sm bg-destructive/10 border border-destructive/30 rounded-md p-3 mb-4">
+              Al continuar se borrarán{" "}
+              {forceDeleteTarget.mode === "batch"
+                ? "los productos seleccionados"
+                : "el producto"}{" "}
+              junto con todo su historial vinculado (compras, combos,
+              promociones, consignaciones, traspasos y pedidos web). Esta
+              acción no se puede deshacer.
+            </div>
+            <label className="flex items-start gap-2 text-sm mb-4 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={forceAcknowledge}
+                onChange={(e) => setForceAcknowledge(e.target.checked)}
+                className="mt-1 rounded border-border cursor-pointer"
+              />
+              <span>
+                Entiendo que se borrará también el historial vinculado y quiero
+                continuar.
+              </span>
+            </label>
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                onClick={closeForceModal}
+                disabled={isBatchDeleting || isDeleting}
+              >
+                Cancelar
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={handleForceConfirm}
+                disabled={
+                  !forceAcknowledge || isBatchDeleting || isDeleting
+                }
+              >
+                {isBatchDeleting || isDeleting
+                  ? "Borrando..."
+                  : "Sí, borrar todo"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <CSVImportModal
         isOpen={isCSVModalOpen}
         onClose={() => setIsCSVModalOpen(false)}
@@ -320,15 +456,15 @@ const ProductTable = () => {
         categories={categories}
         suppliers={suppliers}
         isSaving={isSavingBatch}
-        onSave={async (data) => {
+          onSave={async (data) => {
           setIsSavingBatch(true);
           try {
-            const res = await fetch("/api/products/batch-update", {
+            const res = await fetch("/api/products/batch", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 ids: Array.from(selectedIds),
-                isAllPagesSelected,
+                allPages: isAllPagesSelected,
                 filters: isAllPagesSelected ? filters : undefined,
                 ...data,
               }),
