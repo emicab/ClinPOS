@@ -539,6 +539,11 @@ export const useSaleState = () => {
   const handleProductKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key !== "Enter" && e.code !== "NumpadEnter") return;
 
+    // Nunca enviar la venta desde el buscador: Enter pertenece al lector o a
+    // la selección del producto, incluso si el campo quedó momentáneamente
+    // vacío entre dos escaneos.
+    e.preventDefault();
+
     // Leer el input directamente evita usar un estado un render atrasado
     // cuando el lector envía el último carácter y Enter casi juntos.
     const term = e.currentTarget.value.trim();
@@ -547,7 +552,6 @@ export const useSaleState = () => {
     // Enter en el buscador siempre selecciona un producto. Esto permite que
     // el lector de barras (que normalmente envía código + Enter) y la
     // búsqueda por nombre compartan exactamente el mismo flujo.
-    e.preventDefault();
     barcodeInput.current = "";
 
     const normalizedTerm = term.toLocaleLowerCase();
@@ -605,14 +609,6 @@ export const useSaleState = () => {
     setFormData((prev) => ({ ...prev, items: [...prev.items, newItem] }));
     setProductSearchTerm("");
     setSearchedProducts([]);
-
-    setTimeout(() => {
-      const el = document.getElementById(`qty-input-${tempId}`);
-      if (el) {
-        el.focus();
-        (el as HTMLInputElement).select();
-      }
-    }, 100);
   };
 
   const handleSelectProduct = (product: Product) => {
@@ -651,14 +647,7 @@ export const useSaleState = () => {
       toast.success(`${product.name}: cantidad incrementada a ${newQty}`);
       setProductSearchTerm("");
       setSearchedProducts([]);
-
-      setTimeout(() => {
-        const el = document.getElementById(`qty-input-${existing.tempId}`);
-        if (el) {
-          el.focus();
-          (el as HTMLInputElement).select();
-        }
-      }, 100);
+      setTimeout(() => productInputRef.current?.focus(), 50);
       return;
     }
     if (showFraccionada && !product.unitType) {

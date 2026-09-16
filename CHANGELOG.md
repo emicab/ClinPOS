@@ -2,12 +2,18 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.17.2] - 2026-09-16
+
+### Corregido
+- **Escaneos consecutivos**: el foco permanece en el buscador y `Enter` nunca confirma accidentalmente la venta después de escanear un producto.
+- **Notas del actualizador**: las releases toman automáticamente la sección correspondiente del changelog para mostrarla en el modal de actualización.
+
 ## [1.17.1] - 2026-09-16
 
 ### Corregido
 - **Conflictos de sincronización falsos**: los movimientos normales ya no se muestran como conflictos si no existe una operación local pendiente o fallida.
 - **Indicador de nube en el sidebar**: diseño simplificado, con un único ícono de alerta cuando hay conflictos para revisar.
-- **Confirmación de productos con Enter**: el buscador de ventas usa el valor actual del input, compatible con escritura rápida, lectores de código y teclado numérico.
+- **Flujo de venta con lector de códigos**: `Enter` agrega el producto y devuelve el foco al buscador para permitir escaneos consecutivos; nunca confirma la venta desde ese campo. `F2` queda reservado para confirmar/cerrar la venta.
 
 ## [1.16.2] - 2026-09-15
 
