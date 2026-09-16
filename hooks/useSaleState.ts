@@ -537,9 +537,11 @@ export const useSaleState = () => {
 
   // Escaneo de código de barras INYECTANDO SUCURSAL
   const handleProductKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key !== "Enter") return;
+    if (e.key !== "Enter" && e.code !== "NumpadEnter") return;
 
-    const term = productSearchTerm.trim();
+    // Leer el input directamente evita usar un estado un render atrasado
+    // cuando el lector envía el último carácter y Enter casi juntos.
+    const term = e.currentTarget.value.trim();
     if (!term) return;
 
     // Enter en el buscador siempre selecciona un producto. Esto permite que
