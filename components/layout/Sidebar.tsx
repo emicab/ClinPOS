@@ -733,33 +733,34 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
           <span className="text-[10px] uppercase font-bold text-foreground-muted tracking-wider">
             ☁ Nube
           </span>
-          {!online ? (
-            <span className="text-[10px] font-bold text-foreground-muted bg-muted border border-border px-1.5 py-0.5 rounded-full">
-              sin conexión
-            </span>
-          ) : pendingSync > 0 ? (
-            <span className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded-full">
-              {pendingSync} pendientes
-              {pendingBreakdown.length > 0 && (
-                <span className="ml-1 font-normal" title={pendingBreakdown.map(formatSyncBreakdown).join(" · ")}>
-                  · {pendingBreakdown.map((item) => (
-                    <span key={`${item.entity}-${item.operation}`} className="ml-1 inline-block rounded-full bg-amber-50 px-1.5 py-0.5 text-[9px] font-semibold text-amber-900">
-                      {item.count} {item.operation === "DELETE" ? "bajas" : "cambios"}
-                    </span>
-                  ))}
-                </span>
-              )}
-            </span>
-          ) : (
-            <span className="text-[10px] font-bold text-emerald-700">
-              al día{syncAgo ? ` · ${syncAgo}` : ""}
-            </span>
-          )}
-          {openConflicts > 0 && (
-            <Link href="/sincronizacion/conflictos" className="ml-1 text-[10px] font-bold text-red-700 hover:underline" title="Hay cambios simultáneos para revisar">
-              · {openConflicts} conflicto{openConflicts !== 1 ? "s" : ""}
-            </Link>
-          )}
+          <div className="flex items-center gap-1.5">
+            {!online ? (
+              <span className="text-[10px] font-bold text-foreground-muted bg-muted border border-border px-1.5 py-0.5 rounded-full">
+                sin conexión
+              </span>
+            ) : pendingSync > 0 ? (
+              <span
+                className="text-[10px] font-bold text-amber-800 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded-full"
+                title={pendingBreakdown.length > 0 ? pendingBreakdown.map(formatSyncBreakdown).join(" · ") : undefined}
+              >
+                {pendingSync} pendientes
+              </span>
+            ) : (
+              <span className="text-[10px] font-bold text-emerald-700">
+                al día{syncAgo ? ` · ${syncAgo}` : ""}
+              </span>
+            )}
+            {openConflicts > 0 && (
+              <Link
+                href="/sincronizacion/conflictos"
+                className="inline-flex items-center justify-center rounded-full p-1 text-red-600 hover:bg-red-100 transition-colors"
+                title={`${openConflicts} conflicto${openConflicts !== 1 ? "s" : ""} requiere${openConflicts === 1 ? "" : "n"} revisión`}
+                aria-label={`${openConflicts} conflicto${openConflicts !== 1 ? "s" : ""} para revisar`}
+              >
+                <AlertTriangle size={15} strokeWidth={2.5} />
+              </Link>
+            )}
+          </div>
         </div>
 
         {currentUser && (

@@ -1197,7 +1197,9 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
         });
         if (existingProduct && !isCloudNewer(p.updatedAt, existingProduct.updatedAt)) {
           const remoteUpdatedAt = new Date(p.updatedAt);
-          if (remoteUpdatedAt > ctx.lastSync && existingProduct.updatedAt > ctx.lastSync) {
+          const { hasPendingLocalChange } = await import("./syncOutbox");
+          const hasLocalPendingChange = await hasPendingLocalChange("Product", String(productId));
+          if (hasLocalPendingChange && remoteUpdatedAt > ctx.lastSync && existingProduct.updatedAt > ctx.lastSync) {
             await recordSyncConflict({
               entity: "Product",
               entityKey: String(productId),
@@ -1275,7 +1277,9 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
         // "Último escritor gana": no pisar un stock local más reciente que la nube.
         if (existingPbs && !isCloudNewer(bs.updatedAt, existingPbs.updatedAt)) {
           const remoteUpdatedAt = new Date(bs.updatedAt);
-          if (remoteUpdatedAt > ctx.lastSync && existingPbs.updatedAt > ctx.lastSync) {
+          const { hasPendingLocalChange } = await import("./syncOutbox");
+          const hasLocalPendingChange = await hasPendingLocalChange("ProductBranchStock", String(localProductId));
+          if (hasLocalPendingChange && remoteUpdatedAt > ctx.lastSync && existingPbs.updatedAt > ctx.lastSync) {
             await recordSyncConflict({
               entity: "ProductBranchStock",
                 entityKey: `${localProductId}:${bs.branchId}`,

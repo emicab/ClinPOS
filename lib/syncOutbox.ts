@@ -132,6 +132,25 @@ export async function isOutboxDeletePending(entity: string, entityKey: string): 
   }
 }
 
+// Un conflicto solo es real si todavía existe una modificación local que no
+// pudo llegar a la nube. Sin esta comprobación, un pull de un registro viejo
+// puede confundirse con un cambio simultáneo y llenar la pantalla de avisos.
+export async function hasPendingLocalChange(entity: string, entityKey: string): Promise<boolean> {
+  try {
+    const pending = await prisma.syncOutbox.findFirst({
+      where: {
+        entity,
+        entityKey,
+        status: { in: ["PENDING", "FAILED"] },
+      },
+      select: { id: true },
+    });
+    return !!pending;
+  } catch {
+    return false;
+  }
+}
+
 export async function enqueueStockMovement(input: {
   operationId: string;
   productId: number;
