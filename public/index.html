@@ -47,7 +47,9 @@
   <script>
     (function () {
       function pollServer() {
-        fetch('http://localhost:3001/api/config')
+        // Health es público y no requiere la cookie interna. Consultar
+        // /api/config aquí generaba un bucle de 403 antes del canje del token.
+        fetch('http://localhost:3001/api/health/db')
           .then(function (res) {
             if (res.ok || res.status < 500) {
               window.location.href = 'http://localhost:3001';

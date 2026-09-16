@@ -4,8 +4,10 @@
 import prisma from "./prisma";
 import os from "os";
 import crypto from "crypto";
+import fs from "fs/promises";
+import path from "path";
 import { isMainDevice } from "./branchIdentity";
-import { getDeviceSettings } from "./profiles";
+import { getDataDir, getDeviceSettings } from "./profiles";
 import {
   fetchWithTimeout,
   recalcProductTotal,
@@ -35,7 +37,20 @@ import {
   toStockTransferPayload,
   toStockTransferItemPayload,
   type SyncPhaseContext,
+  type SyncCursors,
 } from "./syncPhases";
+
+const SYNC_CURSORS_SETTING = "supabase_sync_cursors";
+
+function parseSyncCursors(value?: string): SyncCursors {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 async function loadConfigFromDb(): Promise<Record<string, string>> {
   const settings = await prisma.setting.findMany();
@@ -97,13 +112,65 @@ export async function getSelectiveSyncCredentials(): Promise<{
   return { supabaseUrl, supabaseKey, tenantId };
 }
 
-export async function runSupabaseSync(forceFullSync: boolean = false): Promise<{
+type SyncResult = {
   success: boolean;
   message?: string;
   lastSync?: string;
   syncedTables?: Record<string, number>;
   tenantId?: string;
-}> {
+};
+
+// Evita que el auto-sync y un sync manual trabajen sobre el mismo watermark
+// al mismo tiempo. Esto es especialmente importante porque el flujo hace
+// PULL y PUSH en varias fases y no es transaccional entre todas las tablas.
+let activeSyncPromise: Promise<SyncResult> | null = null;
+
+const SYNC_LOCK_FILE = "clinpos-sync.lock";
+const SYNC_LOCK_MAX_AGE_MS = 15 * 60 * 1000;
+
+async function acquirePersistentSyncLock(): Promise<(() => Promise<void>) | null> {
+  const lockPath = path.join(getDataDir(), SYNC_LOCK_FILE);
+  const token = `${process.pid}:${crypto.randomBytes(12).toString("hex")}`;
+
+  const tryCreate = async (): Promise<boolean> => {
+    try {
+      await fs.mkdir(path.dirname(lockPath), { recursive: true });
+      const handle = await fs.open(lockPath, "wx");
+      await handle.writeFile(JSON.stringify({ token, pid: process.pid, createdAt: new Date().toISOString() }));
+      await handle.close();
+      return true;
+    } catch (error: any) {
+      if (error?.code !== "EEXIST") throw error;
+      return false;
+    }
+  };
+
+  let acquired = await tryCreate();
+  if (!acquired) {
+    try {
+      const stat = await fs.stat(lockPath);
+      if (Date.now() - stat.mtimeMs > SYNC_LOCK_MAX_AGE_MS) {
+        await fs.unlink(lockPath);
+        acquired = await tryCreate();
+      }
+    } catch (error: any) {
+      if (error?.code === "ENOENT") acquired = await tryCreate();
+    }
+  }
+
+  if (!acquired) return null;
+
+  return async () => {
+    try {
+      const raw = await fs.readFile(lockPath, "utf8");
+      if (raw.includes(token)) await fs.unlink(lockPath);
+    } catch {
+      // Si otro proceso recuperó un lock vencido, no debemos borrarlo.
+    }
+  };
+}
+
+async function runSupabaseSyncInternal(forceFullSync: boolean = false): Promise<SyncResult> {
   try {
     const { loadEnv } = await import("./envLoader");
     loadEnv();
@@ -111,6 +178,7 @@ export async function runSupabaseSync(forceFullSync: boolean = false): Promise<{
     const config = await loadConfigFromDb();
     const { supabaseUrl, supabaseKey, tenantId } = await getSelectiveSyncCredentials();
     const lastSyncStr = config.supabase_last_sync;
+    const syncCursors = parseSyncCursors(config[SYNC_CURSORS_SETTING]);
 
     const isMainDeviceFlag = await isMainDevice();
 
@@ -135,7 +203,7 @@ export async function runSupabaseSync(forceFullSync: boolean = false): Promise<{
     const mainBranchId = await getMainBranchId();
     await bootstrapBranchStocks(mainBranchId);
 
-    const entities = await loadLocalEntities(lastSync, forceFullSync);
+    const entities = await loadLocalEntities(lastSync, forceFullSync, syncCursors);
     const firstStoreConfig = entities.storeConfigs[0];
     const supabaseWebOrderIds = await mapCloudWebOrderIds(supabaseUrl, supabaseKey, tenantId);
 
@@ -197,7 +265,7 @@ export async function runSupabaseSync(forceFullSync: boolean = false): Promise<{
     let outboxNetworkError = false;
     try {
       const { drainOutbox } = await import("./syncOutbox");
-      const outboxResult = await drainOutbox(200);
+      const outboxResult = await drainOutbox(1000);
       outboxNetworkError = outboxResult.networkError;
       if (outboxResult.drained > 0) {
         console.log(`[Sync] Outbox drenado: ${outboxResult.drained} operación(es). Pendientes: ${outboxResult.remaining}`);
@@ -222,6 +290,41 @@ export async function runSupabaseSync(forceFullSync: boolean = false): Promise<{
       create: { key: "supabase_last_sync", value: syncTimeString }
     });
 
+    // Cursor por dominio: queda actualizado solo cuando todo el ciclo y el
+    // outbox terminaron correctamente. El watermark global se conserva para
+    // compatibilidad con instalaciones anteriores.
+    const nextCursors: SyncCursors = {
+      ...syncCursors,
+      default: syncTimeString,
+      Branch: syncTimeString,
+      Brand: syncTimeString,
+      Category: syncTimeString,
+      Supplier: syncTimeString,
+      DiscountCode: syncTimeString,
+      Promotion: syncTimeString,
+      Client: syncTimeString,
+      Seller: syncTimeString,
+      User: syncTimeString,
+      Product: syncTimeString,
+      ProductBranchStock: syncTimeString,
+      CashRegister: syncTimeString,
+      AccountBalance: syncTimeString,
+      Combo: syncTimeString,
+      Sale: syncTimeString,
+      Purchase: syncTimeString,
+      Expense: syncTimeString,
+      CashMovement: syncTimeString,
+      AccountMovement: syncTimeString,
+      WebOrder: syncTimeString,
+      StockTransfer: syncTimeString,
+      ProductModifierGroup: syncTimeString,
+    };
+    await prisma.setting.upsert({
+      where: { key: SYNC_CURSORS_SETTING },
+      update: { value: JSON.stringify(nextCursors) },
+      create: { key: SYNC_CURSORS_SETTING, value: JSON.stringify(nextCursors) },
+    });
+
     console.log(`[Sync] Finished successfully.`);
 
     return {
@@ -238,6 +341,32 @@ export async function runSupabaseSync(forceFullSync: boolean = false): Promise<{
       message: error.message || "Error al sincronizar con Supabase."
     };
   }
+}
+
+export function runSupabaseSync(forceFullSync: boolean = false): Promise<SyncResult> {
+  if (activeSyncPromise) {
+    console.warn("[Sync] Ya hay una sincronización en curso; se reutiliza su resultado.");
+    return activeSyncPromise;
+  }
+
+  activeSyncPromise = (async () => {
+    const releaseLock = await acquirePersistentSyncLock();
+    if (!releaseLock) {
+      return {
+        success: true,
+        message: "Ya hay otra sincronización en curso. Se continuará automáticamente.",
+      };
+    }
+    try {
+      return await runSupabaseSyncInternal(forceFullSync);
+    } finally {
+      await releaseLock();
+    }
+  })().finally(() => {
+    activeSyncPromise = null;
+  });
+
+  return activeSyncPromise;
 }
 
 // ===== SELECTIVE SYNC HELPERS =====
@@ -519,6 +648,20 @@ export async function deleteProductFromSupabase(productId: number): Promise<bool
     return res.ok;
   } catch (error) {
     console.error("Error en deleteProductFromSupabase:", error);
+    return false;
+  }
+}
+
+export async function deleteSaleFromSupabase(saleId: number): Promise<boolean> {
+  if (!(await isCloudAllowed())) return false;
+  try {
+    const { supabaseUrl, supabaseKey, tenantId } = await getSelectiveSyncCredentials();
+    const headers = { "apikey": supabaseKey, "Authorization": `Bearer ${supabaseKey}` };
+    const url = `${supabaseUrl}/rest/v1/Sale?tenant_id=eq.${encodeURIComponent(tenantId)}&id=eq.${saleId}`;
+    const res = await fetch(url, { method: "DELETE", headers });
+    return res.ok;
+  } catch (error) {
+    console.error("Error en deleteSaleFromSupabase:", error);
     return false;
   }
 }

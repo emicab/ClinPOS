@@ -658,10 +658,48 @@ model SyncOutbox {
   status    String   @default("PENDING") // PENDING | DONE | FAILED
   attempts  Int      @default(0)
   lastError String?
+  payloadJson String?
+  nextAttemptAt DateTime?
+  lastAttemptAt DateTime?
+  lockedAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([status])
+  @@index([status, nextAttemptAt])
+  @@index([entity, entityKey, status])
+}
+
+// Registro durable de borrados. Evita que un registro eliminado offline
+// vuelva a aparecer durante un pull posterior.
+model SyncTombstone {
+  id        Int      @id @default(autoincrement())
+  entity    String
+  entityKey String
+  deletedAt DateTime @default(now())
+  deviceId  String?
+  createdAt DateTime @default(now())
+
+  @@unique([entity, entityKey])
+  @@index([deletedAt])
+}
+
+// Conflictos que no deben resolverse silenciosamente con "último escritor".
+model SyncConflict {
+  id           Int      @id @default(autoincrement())
+  entity       String
+  entityKey    String
+  localVersion String?
+  remoteVersion String?
+  localPayload String?
+  remotePayload String?
+  status       String   @default("OPEN") // OPEN | RESOLVED | IGNORED
+  resolution  String?
+  createdAt   DateTime @default(now())
+  resolvedAt  DateTime?
+
+  @@index([status])
+  @@index([entity, entityKey, status])
 }
 
 model ProductModifierGroup {

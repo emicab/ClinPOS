@@ -534,6 +534,100 @@ const MIGRATIONS: &[Migration] = &[
             CREATE UNIQUE INDEX IF NOT EXISTS "WebOrder_externalOrderId_key" ON "WebOrder"("externalOrderId");
         "#,
     },
+    Migration {
+        version: 25,
+        name: "sync_protocol_v2",
+        sql: r#"
+            ALTER TABLE "SyncOutbox" ADD COLUMN "payloadJson" TEXT;
+            ALTER TABLE "SyncOutbox" ADD COLUMN "nextAttemptAt" DATETIME;
+            ALTER TABLE "SyncOutbox" ADD COLUMN "lastAttemptAt" DATETIME;
+            ALTER TABLE "SyncOutbox" ADD COLUMN "lockedAt" DATETIME;
+            CREATE INDEX IF NOT EXISTS "SyncOutbox_status_nextAttemptAt_idx"
+                ON "SyncOutbox" ("status", "nextAttemptAt");
+            CREATE INDEX IF NOT EXISTS "SyncOutbox_entity_entityKey_status_idx"
+                ON "SyncOutbox" ("entity", "entityKey", "status");
+            CREATE TABLE IF NOT EXISTS "SyncTombstone" (
+                "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                "entity" TEXT NOT NULL,
+                "entityKey" TEXT NOT NULL,
+                "deletedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "deviceId" TEXT,
+                "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS "SyncTombstone_entity_entityKey_key"
+                ON "SyncTombstone" ("entity", "entityKey");
+            CREATE TABLE IF NOT EXISTS "SyncConflict" (
+                "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                "entity" TEXT NOT NULL,
+                "entityKey" TEXT NOT NULL,
+                "localVersion" TEXT,
+                "remoteVersion" TEXT,
+                "localPayload" TEXT,
+                "remotePayload" TEXT,
+                "status" TEXT NOT NULL DEFAULT 'OPEN',
+                "resolution" TEXT,
+                "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "resolvedAt" DATETIME
+            );
+            CREATE INDEX IF NOT EXISTS "SyncConflict_status_idx"
+                ON "SyncConflict" ("status");
+            CREATE INDEX IF NOT EXISTS "SyncConflict_entity_entityKey_status_idx"
+                ON "SyncConflict" ("entity", "entityKey", "status");
+        "#,
+    },
+    Migration {
+        version: 26,
+        name: "sync_protocol_v2_repair",
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS "SyncOutbox" (
+                "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                "operation" TEXT NOT NULL,
+                "entity" TEXT NOT NULL,
+                "entityKey" TEXT NOT NULL,
+                "status" TEXT NOT NULL DEFAULT 'PENDING',
+                "attempts" INTEGER NOT NULL DEFAULT 0,
+                "lastError" TEXT,
+                "payloadJson" TEXT,
+                "nextAttemptAt" DATETIME,
+                "lastAttemptAt" DATETIME,
+                "lockedAt" DATETIME,
+                "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            ALTER TABLE "SyncOutbox" ADD COLUMN "payloadJson" TEXT;
+            ALTER TABLE "SyncOutbox" ADD COLUMN "nextAttemptAt" DATETIME;
+            ALTER TABLE "SyncOutbox" ADD COLUMN "lastAttemptAt" DATETIME;
+            ALTER TABLE "SyncOutbox" ADD COLUMN "lockedAt" DATETIME;
+            CREATE INDEX IF NOT EXISTS "SyncOutbox_status_idx" ON "SyncOutbox"("status");
+            CREATE INDEX IF NOT EXISTS "SyncOutbox_status_nextAttemptAt_idx" ON "SyncOutbox"("status", "nextAttemptAt");
+            CREATE INDEX IF NOT EXISTS "SyncOutbox_entity_entityKey_status_idx" ON "SyncOutbox"("entity", "entityKey", "status");
+            CREATE TABLE IF NOT EXISTS "SyncTombstone" (
+                "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                "entity" TEXT NOT NULL,
+                "entityKey" TEXT NOT NULL,
+                "deletedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "deviceId" TEXT,
+                "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS "SyncTombstone_entity_entityKey_key" ON "SyncTombstone"("entity", "entityKey");
+            CREATE INDEX IF NOT EXISTS "SyncTombstone_deletedAt_idx" ON "SyncTombstone"("deletedAt");
+            CREATE TABLE IF NOT EXISTS "SyncConflict" (
+                "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                "entity" TEXT NOT NULL,
+                "entityKey" TEXT NOT NULL,
+                "localVersion" TEXT,
+                "remoteVersion" TEXT,
+                "localPayload" TEXT,
+                "remotePayload" TEXT,
+                "status" TEXT NOT NULL DEFAULT 'OPEN',
+                "resolution" TEXT,
+                "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                "resolvedAt" DATETIME
+            );
+            CREATE INDEX IF NOT EXISTS "SyncConflict_status_idx" ON "SyncConflict"("status");
+            CREATE INDEX IF NOT EXISTS "SyncConflict_entity_entityKey_status_idx" ON "SyncConflict"("entity", "entityKey", "status");
+        "#,
+    },
 ];
 
 // ── Declarative safety net ─────────────────────────────────────────────
@@ -550,6 +644,12 @@ const MIGRATIONS: &[Migration] = &[
 // antes que este verificador).
 // Mantener sincronizado con pages/api/health/db.ts y scripts/check-drift.js.
 const EXPECTED_COLUMNS: &[(&str, &str, &str)] = &[
+    ("SyncOutbox", "payloadJson", "TEXT"),
+    ("SyncOutbox", "nextAttemptAt", "DATETIME"),
+    ("SyncOutbox", "lastAttemptAt", "DATETIME"),
+    ("SyncOutbox", "lockedAt", "DATETIME"),
+    ("SyncConflict", "status", "TEXT"),
+    ("SyncTombstone", "entityKey", "TEXT"),
     ("Setting", "id", "INTEGER"),
     ("Setting", "key", "TEXT"),
     ("Setting", "value", "TEXT"),
@@ -719,6 +819,61 @@ fn ensure_expected_columns(conn: &Connection) {
     );
 }
 
+// Se ejecuta en cada arranque y no depende de _app_migrations. Esto repara
+// instalaciones donde una actualización quedó interrumpida o fue marcada
+// como aplicada sin crear todas las tablas del protocolo de sync.
+fn ensure_sync_protocol_tables(conn: &Connection) {
+    let statements = [
+        r#"CREATE TABLE IF NOT EXISTS "SyncOutbox" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "operation" TEXT NOT NULL,
+            "entity" TEXT NOT NULL,
+            "entityKey" TEXT NOT NULL,
+            "status" TEXT NOT NULL DEFAULT 'PENDING',
+            "attempts" INTEGER NOT NULL DEFAULT 0,
+            "lastError" TEXT,
+            "payloadJson" TEXT,
+            "nextAttemptAt" DATETIME,
+            "lastAttemptAt" DATETIME,
+            "lockedAt" DATETIME,
+            "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS "SyncTombstone" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "entity" TEXT NOT NULL,
+            "entityKey" TEXT NOT NULL,
+            "deletedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            "deviceId" TEXT,
+            "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )"#,
+        r#"CREATE TABLE IF NOT EXISTS "SyncConflict" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "entity" TEXT NOT NULL,
+            "entityKey" TEXT NOT NULL,
+            "localVersion" TEXT,
+            "remoteVersion" TEXT,
+            "localPayload" TEXT,
+            "remotePayload" TEXT,
+            "status" TEXT NOT NULL DEFAULT 'OPEN',
+            "resolution" TEXT,
+            "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            "resolvedAt" DATETIME
+        )"#,
+        r#"CREATE INDEX IF NOT EXISTS "SyncOutbox_status_idx" ON "SyncOutbox"("status")"#,
+        r#"CREATE INDEX IF NOT EXISTS "SyncOutbox_status_nextAttemptAt_idx" ON "SyncOutbox"("status", "nextAttemptAt")"#,
+        r#"CREATE INDEX IF NOT EXISTS "SyncOutbox_entity_entityKey_status_idx" ON "SyncOutbox"("entity", "entityKey", "status")"#,
+        r#"CREATE UNIQUE INDEX IF NOT EXISTS "SyncTombstone_entity_entityKey_key" ON "SyncTombstone"("entity", "entityKey")"#,
+        r#"CREATE INDEX IF NOT EXISTS "SyncConflict_status_idx" ON "SyncConflict"("status")"#,
+        r#"CREATE INDEX IF NOT EXISTS "SyncConflict_entity_entityKey_status_idx" ON "SyncConflict"("entity", "entityKey", "status")"#,
+    ];
+    for statement in statements {
+        if let Err(error) = conn.execute(statement, []) {
+            eprintln!("[Migrations] sync schema repair error: {}", error);
+        }
+    }
+}
+
 fn run_migrations(db_path: &Path) {
     let conn = match Connection::open(db_path) {
         Ok(c) => c,
@@ -826,6 +981,8 @@ fn run_migrations(db_path: &Path) {
             println!("[Migrations] ✓ v{} applied successfully", migration.version);
         }
     }
+
+    ensure_sync_protocol_tables(&conn);
 
     // Red de seguridad declarativa: crea cualquier columna esperada que falte,
     // aunque su migración versionada se haya marcado aplicada en el pasado.
@@ -1163,6 +1320,36 @@ async fn kill_stale_node_servers(app_handle: tauri::AppHandle) -> Result<usize, 
         Ok(kill_pids(&find_stale_node_pids(&needle), "Update"))
     }
 }
+
+/// Cierre definitivo para el updater. Cerrar solo la ventana puede dejar vivo
+/// el runtime Tauri/WebView durante unos instantes y Windows todavía ve node
+/// como archivo en uso. Este comando libera el servidor y termina el proceso
+/// principal de forma explícita después de descargar/instalar la actualización.
+#[tauri::command]
+async fn exit_for_update(
+    app_handle: tauri::AppHandle,
+    state: tauri::State<'_, ServerState>,
+) -> Result<(), String> {
+    if let Ok(mut server_state) = state.0.lock() {
+        if let Some(mut child) = server_state.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        let resource_dir = app_handle.path().resource_dir().unwrap_or_default();
+        let standalone_dir = resolve_standalone_dir(&resource_dir);
+        let needle = standalone_needle(&standalone_dir);
+        if !needle.is_empty() {
+            kill_pids(&find_stale_node_pids(&needle), "ExitForUpdate");
+        }
+    }
+
+    app_handle.exit(0);
+    Ok(())
+}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -1179,7 +1366,7 @@ pub fn run() {
       }
     }))
     .manage(ServerState(Mutex::new(None)))
-    .invoke_handler(tauri::generate_handler![backup_database, restore_database, kill_server, kill_stale_node_servers, save_report_file])
+    .invoke_handler(tauri::generate_handler![backup_database, restore_database, kill_server, kill_stale_node_servers, exit_for_update, save_report_file])
     .setup(|app| {
       #[cfg(debug_assertions)]
       {

@@ -9,6 +9,7 @@
 //   - scripts/check-drift.js
 import type { NextApiRequest, NextApiResponse } from "next";
 import prisma from "../../../lib/prisma";
+import { ensureLocalSyncSchema } from "../../../lib/ensureLocalSyncSchema";
 
 const EXPECTED_TABLES = [
   "Setting",
@@ -18,6 +19,9 @@ const EXPECTED_TABLES = [
   "WebOrderItem",
   "Coupon",
   "Sale",
+  "SyncOutbox",
+  "SyncTombstone",
+  "SyncConflict",
 ] as const;
 
 // Cobertura total de escalares de los modelos foco (ver EXPECTED_COLUMNS en
@@ -168,6 +172,12 @@ const EXPECTED_COLUMNS: Array<[table: string, column: string]> = [
   ["SaleItem", "productId"],
   ["SaleItem", "productName"],
   ["SaleItem", "modifiers"],
+  ["SyncOutbox", "payloadJson"],
+  ["SyncOutbox", "nextAttemptAt"],
+  ["SyncOutbox", "lastAttemptAt"],
+  ["SyncOutbox", "lockedAt"],
+  ["SyncConflict", "status"],
+  ["SyncTombstone", "entityKey"],
 ];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -177,6 +187,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    // En producción standalone no siempre se ejecuta Tauri (que normalmente
+    // aplica las migraciones). Reparar primero garantiza que el chequeo y las
+    // rutas de sync no consulten tablas/columnas de una versión anterior.
+    await ensureLocalSyncSchema();
+
     const tablesRows = (await prisma.$queryRawUnsafe(
       `SELECT name FROM sqlite_master WHERE type='table'`
     )) as Array<{ name: string }>;

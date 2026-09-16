@@ -253,6 +253,11 @@ export default async function handler(
     }
 
     try {
+      const seller = await prisma.seller.findUnique({ where: { id: Number(sellerId) }, select: { id: true } });
+      if (!seller) {
+        return res.status(400).json({ message: "El vendedor seleccionado ya no existe. Actualizá la lista de vendedores." });
+      }
+
       // Sucursal efectiva: solicitada > sucursal de esta PC > principal
       let effectiveBranchId: number | undefined;
       if (req.body.branchId && !isNaN(parseInt(req.body.branchId))) {
@@ -508,11 +513,29 @@ export default async function handler(
       // [MODIFICADO] Fire-and-forget: encolar venta + productos vendidos en el
       // outbox. El sync a la nube lo hace el auto-sync/drain sin bloquear la venta.
       try {
-        const { enqueueOutbox } = await import("../../../lib/syncOutbox");
+        const { enqueueOutbox, enqueueStockMovement } = await import("../../../lib/syncOutbox");
         if (result?.id) {
           await enqueueOutbox("Sale", "UPSERT", String(result.id));
         }
         const productIds = items.map((item: any) => item.productId);
+        if (result?.id && req.body.status !== 'PENDING') {
+          for (const [index, item] of items.entries()) {
+            const product = await prisma.product.findUnique({
+              where: { id: item.productId },
+              select: { isRecipe: true },
+            });
+            // Los elaborados descuentan ingredientes; esos movimientos se
+            // incorporan en una etapa específica del recetario.
+            if (!product?.isRecipe) {
+              await enqueueStockMovement({
+                operationId: `sale:${result.id}:item:${index}`,
+                productId: item.productId,
+                delta: -Number(item.quantity),
+                branchId: effectiveBranchId ?? null,
+              });
+            }
+          }
+        }
         const allAffected = Array.from(new Set([...productIds, ...affectedIngredientIds]));
         for (const pid of allAffected) {
           await enqueueOutbox("Product", "UPSERT", String(pid));

@@ -65,6 +65,7 @@ const ProductTable = () => {
     totalPages,
     totalProducts,
     fetchProducts,
+    fetchFilterOptions,
     isCSVModalOpen,
     setIsCSVModalOpen,
     isTransferModalOpen,
@@ -434,7 +435,12 @@ const ProductTable = () => {
       <CSVImportModal
         isOpen={isCSVModalOpen}
         onClose={() => setIsCSVModalOpen(false)}
-        onSuccess={() => fetchProducts(1)}
+        onSuccess={async () => {
+          // El import puede crear marcas/categorías/proveedores nuevos:
+          // refrescar los dropdowns para que aparezcan sin recargar.
+          await fetchFilterOptions();
+          fetchProducts(1);
+        }}
       />
 
       <TransferStockModal

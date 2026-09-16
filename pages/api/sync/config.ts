@@ -4,6 +4,17 @@ import crypto from "crypto";
 import os from "os";
 import { isProDevice } from "../../../lib/branchIdentity";
 
+function isServiceRoleKey(value: string): boolean {
+  try {
+    const payload = value.split('.')[1];
+    if (!payload) return false;
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    return decoded?.role === 'service_role';
+  } catch {
+    return false;
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
     res.setHeader("Allow", ["GET"]);
@@ -25,7 +36,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const supabaseUrl = config.supabase_url || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
     // Solo clave pública para el frontend
-    const supabaseAnonKey = config.supabase_anon_key || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+    const configuredKey = config.supabase_anon_key || "";
+    const supabaseAnonKey = !isServiceRoleKey(configuredKey)
+      ? configuredKey
+      : (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "");
 
     if (!supabaseUrl || !supabaseAnonKey) {
       return res.status(400).json({ message: "Supabase no está configurado." });

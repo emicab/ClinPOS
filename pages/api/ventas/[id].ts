@@ -124,6 +124,8 @@ export default async function handler(
 
   } else if (req.method === 'DELETE') {
     let affectedProductIds: number[] = [];
+    let restoredStockItems: Array<{ productId: number; quantity: number; isRecipe: boolean }> = [];
+    let restoredBranchId: number | null = null;
 
     try {
         const result = await prisma.$transaction(async (tx) => {
@@ -151,6 +153,14 @@ export default async function handler(
         }
 
         affectedProductIds = saleToDelete.items.filter(i => i.productId != null).map(i => i.productId as number);
+        restoredStockItems = saleToDelete.items
+          .filter(i => i.productId != null)
+          .map(i => ({
+            productId: i.productId as number,
+            quantity: Number(i.quantity),
+            isRecipe: Boolean(i.product?.isRecipe),
+          }));
+        restoredBranchId = saleToDelete.branchId ?? null;
 
         // 2. Revertir saldo de Cuenta Corriente si estuvo vinculada a un cliente
         if (saleToDelete.clientId) {
@@ -238,7 +248,18 @@ export default async function handler(
 
       // 6. Encolar los productos afectados (fire-and-forget vía outbox)
       try {
-        const { enqueueOutbox } = await import('../../../lib/syncOutbox');
+        const { enqueueOutbox, enqueueStockMovement } = await import('../../../lib/syncOutbox');
+        await enqueueOutbox('Sale', 'DELETE', String(id));
+        for (const [index, item] of restoredStockItems.entries()) {
+          if (!item.isRecipe) {
+            await enqueueStockMovement({
+              operationId: `sale-delete:${id}:item:${index}`,
+              productId: item.productId,
+              delta: item.quantity,
+              branchId: restoredBranchId,
+            });
+          }
+        }
         const uniqueIds = Array.from(new Set(affectedProductIds));
         for (const pid of uniqueIds) {
           await enqueueOutbox('Product', 'UPSERT', String(pid));

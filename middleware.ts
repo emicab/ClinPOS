@@ -91,7 +91,10 @@ export function middleware(request: NextRequest) {
 
         response.cookies.set('app_auth_token', appSecret, {
           httpOnly: true,
-          secure: process.env.NODE_ENV === 'production',
+          // El servidor embebido de Tauri escucha en http://localhost. Enviar
+          // Secure=true en ese origen hace que el WebView descarte la cookie y
+          // todas las llamadas privadas vuelvan a ser bloqueadas.
+          secure: request.nextUrl.protocol === 'https:',
           sameSite: 'lax',
           path: '/',
           maxAge: 60 * 60 * 24 * 365, // 1 año

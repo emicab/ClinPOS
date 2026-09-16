@@ -109,6 +109,8 @@ export default async function handler(
       }
 
       const affectedRecipeIds: number[] = [];
+      const requestedBranchId = req.body?.branchId ? parseInt(String(req.body.branchId)) : NaN;
+      const purchaseBranchId = Number.isFinite(requestedBranchId) ? requestedBranchId : null;
       const result = await prisma.$transaction(async (tx) => {
         const purchaseStatus = status || PurchaseStatus.PENDING;
 
@@ -150,24 +152,20 @@ export default async function handler(
               },
             });
 
-            const { branchId } = req.body as any;
-            if (branchId) {
-              const bId = parseInt(branchId);
-              if (!isNaN(bId)) {
+            if (purchaseBranchId !== null) {
                 await tx.productBranchStock.upsert({
                   where: {
-                    productId_branchId: { productId: item.productId, branchId: bId }
+                    productId_branchId: { productId: item.productId, branchId: purchaseBranchId }
                   },
                   update: {
                     quantityStock: { increment: stockQty }
                   },
                   create: {
                     productId: item.productId,
-                    branchId: bId,
+                    branchId: purchaseBranchId,
                     quantityStock: stockQty
                   }
                 });
-              }
             }
           }
         }
@@ -222,11 +220,21 @@ export default async function handler(
 
       // [MODIFICADO] Fire-and-forget: encolar compra + productos (outbox)
       try {
-        const { enqueueOutbox } = await import('../../../lib/syncOutbox');
+        const { enqueueOutbox, enqueueStockMovement } = await import('../../../lib/syncOutbox');
         if (result?.id) {
           await enqueueOutbox('Purchase', 'UPSERT', String(result.id));
         }
         const productIds = items.map((item: any) => item.productId);
+        if (result?.id && (status || PurchaseStatus.PENDING) === PurchaseStatus.RECEIVED) {
+          for (const [index, item] of items.entries()) {
+            await enqueueStockMovement({
+              operationId: `purchase:${result.id}:item:${index}`,
+              productId: item.productId,
+              delta: Number(item.quantityReceived ?? item.quantity),
+              branchId: purchaseBranchId,
+            });
+          }
+        }
         for (const pid of productIds) {
           await enqueueOutbox('Product', 'UPSERT', String(pid));
           await enqueueOutbox('ProductBranchStock', 'UPSERT', String(pid));

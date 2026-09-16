@@ -454,3 +454,95 @@ CREATE INDEX IF NOT EXISTS "ProductModifierOption_modifierGroupId_idx" ON "Produ
 -- 14d. RLS desactivado para sincronización directa (idempotente)
 ALTER TABLE IF EXISTS "ProductModifierGroup" DISABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS "ProductModifierOption" DISABLE ROW LEVEL SECURITY;
+
+-- 15. Protocolo de sincronización v2: borrados durables y conflictos.
+-- Estas tablas son idempotentes y no modifican datos existentes.
+CREATE TABLE IF NOT EXISTS "SyncTombstone" (
+    "tenant_id" TEXT NOT NULL,
+    "entity" TEXT NOT NULL,
+    "entityKey" TEXT NOT NULL,
+    "deletedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    "deviceId" TEXT,
+    "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY ("tenant_id", "entity", "entityKey")
+);
+
+CREATE INDEX IF NOT EXISTS "SyncTombstone_deletedAt_idx"
+    ON "SyncTombstone"("tenant_id", "deletedAt");
+
+CREATE TABLE IF NOT EXISTS "SyncConflict" (
+    "id" BIGSERIAL PRIMARY KEY,
+    "tenant_id" TEXT NOT NULL,
+    "entity" TEXT NOT NULL,
+    "entityKey" TEXT NOT NULL,
+    "localVersion" TEXT,
+    "remoteVersion" TEXT,
+    "localPayload" JSONB,
+    "remotePayload" JSONB,
+    "status" TEXT NOT NULL DEFAULT 'OPEN',
+    "resolution" TEXT,
+    "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    "resolvedAt" TIMESTAMP WITH TIME ZONE
+);
+
+CREATE INDEX IF NOT EXISTS "SyncConflict_status_idx"
+    ON "SyncConflict"("tenant_id", "status");
+CREATE INDEX IF NOT EXISTS "SyncConflict_entity_entityKey_status_idx"
+    ON "SyncConflict"("tenant_id", "entity", "entityKey", "status");
+
+-- Se mantiene deshabilitado en esta fase: antes de activar RLS hay que
+-- migrar el cliente a autenticación por dispositivo/usuario.
+ALTER TABLE "SyncTombstone" DISABLE ROW LEVEL SECURITY;
+ALTER TABLE "SyncConflict" DISABLE ROW LEVEL SECURITY;
+
+-- 16. Movimiento de stock idempotente y atómico.
+-- El operation_id evita descontar dos veces cuando un cliente reintenta.
+CREATE TABLE IF NOT EXISTS "SyncStockMovement" (
+    "tenant_id" TEXT NOT NULL,
+    "operation_id" TEXT NOT NULL,
+    "productId" BIGINT NOT NULL,
+    "branchId" BIGINT,
+    "delta" NUMERIC NOT NULL,
+    "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY ("tenant_id", "operation_id")
+);
+
+CREATE OR REPLACE FUNCTION apply_stock_movement(
+    p_tenant_id TEXT,
+    p_operation_id TEXT,
+    p_product_id INTEGER,
+    p_delta NUMERIC,
+    p_branch_id INTEGER DEFAULT NULL
+) RETURNS BOOLEAN
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    inserted_count INTEGER;
+BEGIN
+    INSERT INTO "SyncStockMovement" ("tenant_id", "operation_id", "productId", "branchId", "delta")
+    VALUES (p_tenant_id, p_operation_id, p_product_id, p_branch_id, p_delta)
+    ON CONFLICT ("tenant_id", "operation_id") DO NOTHING;
+    GET DIAGNOSTICS inserted_count = ROW_COUNT;
+
+    IF inserted_count = 0 THEN
+        RETURN TRUE;
+    END IF;
+
+    UPDATE "Product"
+    SET "quantityStock" = "quantityStock" + p_delta, "updatedAt" = NOW()
+    WHERE "tenant_id" = p_tenant_id AND "id" = p_product_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Producto inexistente: %', p_product_id;
+    END IF;
+
+    IF p_branch_id IS NOT NULL THEN
+        INSERT INTO "ProductBranchStock" ("tenant_id", "productId", "branchId", "quantityStock", "createdAt", "updatedAt")
+        VALUES (p_tenant_id, p_product_id, p_branch_id, p_delta, NOW(), NOW())
+        ON CONFLICT ("tenant_id", "productId", "branchId")
+        DO UPDATE SET "quantityStock" = "ProductBranchStock"."quantityStock" + p_delta, "updatedAt" = NOW();
+    END IF;
+
+    RETURN TRUE;
+END $$;
+
+GRANT EXECUTE ON FUNCTION apply_stock_movement(TEXT, TEXT, INTEGER, NUMERIC, INTEGER) TO anon, authenticated;

@@ -6,9 +6,10 @@ import Sidebar from "./Sidebar";
 import Header from "./Header";
 import KbdFooter from "./KbdFooter";
 import { useModules } from "@/hooks/useModules";
-import { useSyncStatus } from "@/hooks/useSyncStatus";
+import { formatSyncBreakdown, useSyncStatus } from "@/hooks/useSyncStatus";
 import { usePathname } from "next/navigation";
 import { ShieldAlert, WifiOff, CloudOff } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 
 interface LayoutProps {
   children: React.ReactNode;
@@ -41,7 +42,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     hasRolePermission,
     plan,
   } = useModules();
-  const { online, pendingSync } = useSyncStatus();
+  const { online, pendingSync, pendingBreakdown } = useSyncStatus();
   const pathname = usePathname() || "";
 
   // El sync a la nube solo está activo en planes con respaldo en la nube.
@@ -88,10 +89,59 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
     const initialTimeout = setTimeout(triggerSync, 5000);
     const fallbackInterval = setInterval(triggerSync, 300000);
+    const onConnectionRestored = () => {
+      // El watermark y el outbox hacen que este intento sea idempotente.
+      triggerSync();
+    };
+    window.addEventListener("online", onConnectionRestored);
 
     return () => {
       clearTimeout(initialTimeout);
       clearInterval(fallbackInterval);
+      window.removeEventListener("online", onConnectionRestored);
+    };
+  }, [isLoading, hasSupabaseConfig, showOnboarding, showPinLock, storageMode, plan]);
+
+  // Realtime selectivo: stock y pedidos disparan un pull liviano inmediato;
+  // el ciclo periódico sigue siendo el respaldo ante eventos perdidos.
+  React.useEffect(() => {
+    if (isLoading || plan !== "pro" || !hasSupabaseConfig || showOnboarding || showPinLock || storageMode === "local") return;
+    let channel: ReturnType<ReturnType<typeof createClient>["channel"]> | null = null;
+    let cancelled = false;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const refreshFromRealtime = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(async () => {
+        try {
+          const response = await fetch("/api/sync");
+          if (response.ok) window.dispatchEvent(new Event("sync-completed"));
+        } catch (error) {
+          console.warn("[Realtime] No se pudo actualizar el estado local:", error);
+        }
+      }, 800);
+    };
+
+    (async () => {
+      try {
+        const response = await fetch("/api/sync/config");
+        if (!response.ok || cancelled) return;
+        const config = await response.json();
+        const client = createClient(config.supabaseUrl, config.supabaseAnonKey, { auth: { persistSession: false } });
+        channel = client
+          .channel(`clinpos-${config.tenantId}`)
+          .on("postgres_changes", { event: "*", schema: "public", table: "ProductBranchStock", filter: `tenant_id=eq.${config.tenantId}` }, refreshFromRealtime)
+          .on("postgres_changes", { event: "*", schema: "public", table: "WebOrder", filter: `tenant_id=eq.${config.tenantId}` }, refreshFromRealtime)
+          .subscribe();
+      } catch (error) {
+        console.warn("[Realtime] No se pudo iniciar la escucha:", error);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      if (channel) channel.unsubscribe();
     };
   }, [isLoading, hasSupabaseConfig, showOnboarding, showPinLock, storageMode, plan]);
 
@@ -131,7 +181,16 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
             <div className="mb-4 flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-4 py-2.5 text-sm font-semibold text-blue-600">
               <CloudOff size={16} className="shrink-0" />
               {pendingSync} operación{pendingSync !== 1 ? "es" : ""} pendiente
-              {pendingSync !== 1 ? "s" : ""} de sincronizar con la nube.
+              {pendingSync !== 1 ? "s" : ""} de sincronizar con la nube
+              {pendingBreakdown.length > 0 && (
+                <span className="ml-1 inline-flex flex-wrap items-center gap-1 font-normal">
+                  {pendingBreakdown.map((item) => (
+                    <span key={`${item.entity}-${item.operation}`} className="rounded-full border border-blue-500/20 bg-white/60 px-2 py-0.5 text-[11px] font-semibold">
+                      {formatSyncBreakdown(item)}
+                    </span>
+                  ))}
+                </span>
+              )}.
             </div>
           )}
           {isAccessAllowed ? children : <AccessDeniedView />}

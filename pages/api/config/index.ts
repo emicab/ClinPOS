@@ -8,7 +8,18 @@ import { isDeviceGlobalKey, setDeviceSettings } from '../../../lib/deviceSetting
 import os from 'os';
 
 const OFFICIAL_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://htroigemnwqiugieodmv.supabase.co';
-const OFFICIAL_SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh0cm9pZ2VtbndxaXVnaWVvZG12Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MDM4ODcsImV4cCI6MjA5OTI3OTg4N30.sSp5vEDvI7OHuYL0SeeFiATilC_f_BdZao2BjeN0IVQ';
+const OFFICIAL_SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imh0cm9pZ2VtbndxaXVnaWVvZG12Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MDM4ODcsImV4cCI6MjA5OTI3OTg4N30.sSp5vEDvI7OHuYL0SeeFiATilC_f_BdZao2BjeN0IVQ';
+
+function isServiceRoleKey(value: string): boolean {
+  try {
+    const payload = value.split('.')[1];
+    if (!payload) return false;
+    const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+    return decoded?.role === 'service_role';
+  } catch {
+    return false;
+  }
+}
 
 const getHardwareId = () => {
   if (process.env.HARDWARE_ID) return process.env.HARDWARE_ID;
@@ -90,6 +101,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const deviceSettings = getDeviceSettings();
       for (const [k, v] of Object.entries(deviceSettings)) {
         result[k] = v;
+      }
+
+      // Nunca exponer una credencial privada al frontend.
+      delete result.supabase_service_role_key;
+      if (!result.supabase_anon_key || isServiceRoleKey(result.supabase_anon_key)) {
+        result.supabase_anon_key = OFFICIAL_SUPABASE_KEY;
       }
 
       // Identidad de sucursal de esta PC (server-side)

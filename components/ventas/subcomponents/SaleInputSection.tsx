@@ -81,7 +81,11 @@ export const SaleInputSection: React.FC<SaleInputSectionProps> = ({
         <kbd className="px-1.5 py-0.5 rounded bg-muted border border-border font-mono text-[9px] mx-1 shadow-sm">
           Esc
         </kbd>{" "}
-        limpiar
+        limpiar &middot;
+        <kbd className="px-1.5 py-0.5 rounded bg-muted border border-border font-mono text-[9px] mx-1 shadow-sm">
+          Enter
+        </kbd>{" "}
+        agregar producto
       </p>
     </div>
   );

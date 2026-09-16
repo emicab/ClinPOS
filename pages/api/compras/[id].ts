@@ -309,11 +309,11 @@ export default async function handler(
       if (result.status === PurchaseStatus.RECEIVED) {
         try {
           const { enqueueOutbox } = await import('../../../lib/syncOutbox');
-          const receivedItems = await prisma.purchaseItem.findMany({
+          const purchaseItems = await prisma.purchaseItem.findMany({
             where: { purchaseId: id },
-            select: { productId: true },
+            select: { productId: true, quantityReceived: true, quantity: true },
           });
-          const receivedIds = receivedItems.map((i) => i.productId);
+          const receivedIds = purchaseItems.map((i) => i.productId);
           for (const pid of receivedIds) {
             await enqueueOutbox('Product', 'UPSERT', String(pid));
             await enqueueOutbox('ProductBranchStock', 'UPSERT', String(pid));
@@ -353,6 +353,7 @@ export default async function handler(
       handleApiError(res, error, `updating purchase ${id}`);
     }
   } else if (req.method === 'DELETE') {
+    let deletedReceivedItems: Array<{ productId: number; quantity: number }> = [];
     try {
       const result = await prisma.$transaction(async (tx) => {
         const purchaseToDelete = await tx.purchase.findUnique({
@@ -366,6 +367,10 @@ export default async function handler(
 
         // Si la compra estaba RECEIVED, revertir stock
         if (purchaseToDelete.status === PurchaseStatus.RECEIVED) {
+          deletedReceivedItems = purchaseToDelete.items.map(item => ({
+            productId: item.productId,
+            quantity: Number(item.quantityReceived ?? item.quantity),
+          }));
           for (const item of purchaseToDelete.items) {
             const revertedQty = item.quantityReceived ?? item.quantity;
             const product = await tx.product.findUnique({
@@ -399,6 +404,22 @@ export default async function handler(
 
         return { message: 'Compra eliminada y stock actualizado.' };
       });
+
+      try {
+        const { enqueueOutbox, enqueueStockMovement } = await import('../../../lib/syncOutbox');
+        for (const [index, item] of deletedReceivedItems.entries()) {
+          await enqueueStockMovement({
+            operationId: `purchase-delete:${id}:item:${index}`,
+            productId: item.productId,
+            delta: -item.quantity,
+            branchId: null,
+          });
+          await enqueueOutbox('Product', 'UPSERT', String(item.productId));
+          await enqueueOutbox('ProductBranchStock', 'UPSERT', String(item.productId));
+        }
+      } catch (enqErr) {
+        console.error('[Compras] Error al encolar eliminación:', enqErr);
+      }
 
       res.status(200).json(result);
     } catch (error: any) {

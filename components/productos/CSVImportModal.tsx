@@ -121,11 +121,18 @@ const CSVImportModal: React.FC<CSVImportModalProps> = ({
 
   const autoMapFields = (headers: string[]) => {
     const initialMapping: Record<string, string> = {};
-    const lowerHeaders = headers.map((h) => h.toLowerCase().trim());
+    const normalize = (h: string) =>
+      h
+        .toLowerCase()
+        .trim()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+    const normalizedHeaders = headers.map((h) => normalize(h));
 
     const findHeader = (keywords: string[]) => {
-      for (const kw of keywords) {
-        const index = lowerHeaders.findIndex((h) => h.includes(kw));
+      const normalizedKeywords = keywords.map((k) => normalize(k));
+      for (const kw of normalizedKeywords) {
+        const index = normalizedHeaders.findIndex((h) => h.includes(kw));
         if (index !== -1) return headers[index];
       }
       return "";
@@ -167,7 +174,19 @@ const CSVImportModal: React.FC<CSVImportModalProps> = ({
           matched = findHeader(["categoría", "categoria", "rubro"]);
           break;
         case "supplierName":
-          matched = findHeader(["proveedor", "supplier"]);
+          matched = findHeader([
+            "proveedor",
+            "proveedores",
+            // Tolerar typos comunes: falta una "e" (provedor/provedores,
+            // provedoores) -> stems provee/proved los capturan igual
+            "provedor",
+            "provedores",
+            "provedoores",
+            "provee",
+            "proved",
+            "supplier",
+            "suppliers",
+          ]);
           break;
       }
       if (matched) initialMapping[field.key] = matched;
@@ -253,11 +272,20 @@ const CSVImportModal: React.FC<CSVImportModalProps> = ({
         );
       }
       if (
+        Array.isArray(result.createdSuppliers) &&
+        result.createdSuppliers.length > 0
+      ) {
+        toast.success(
+          `${result.createdSuppliers.length} proveedor(es) creados desde el CSV: ${result.createdSuppliers.slice(0, 5).join(", ")}${result.createdSuppliers.length > 5 ? "…" : ""}`,
+          { duration: 8000 },
+        );
+      }
+      if (
         Array.isArray(result.unlinkedSuppliers) &&
         result.unlinkedSuppliers.length > 0
       ) {
         toast(
-          `${result.unlinkedSuppliers.length} producto(s) quedaron sin proveedor porque no existe en el sistema: ${result.unlinkedSuppliers.slice(0, 5).join(", ")}${result.unlinkedSuppliers.length > 5 ? "…" : ""}`,
+          `${result.unlinkedSuppliers.length} producto(s) quedaron sin proveedor (valor omitido o inválido): ${result.unlinkedSuppliers.slice(0, 5).join(", ")}${result.unlinkedSuppliers.length > 5 ? "…" : ""}`,
           { duration: 8000 },
         );
       }
@@ -391,6 +419,19 @@ const CSVImportModal: React.FC<CSVImportModalProps> = ({
                   ))}
                 </div>
               </div>
+
+              {!mapping["supplierName"] && (
+                <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-md">
+                  <AlertCircle size={16} className="text-amber-600 mt-0.5 shrink-0" />
+                  <p className="text-xs text-foreground-muted">
+                    La columna de Proveedor quedó en “-- Ignorar este campo --”.
+                    Si tu CSV trae proveedor (ej. columnas “proveedor”,
+                    “proveedores” o “provedores”), seleccionala arriba en el
+                    campo Proveedor, si no los productos se crearán sin
+                    proveedor.
+                  </p>
+                </div>
+              )}
 
               <div className="flex justify-end gap-3 pt-4 border-t border-border mt-4">
                 <Button

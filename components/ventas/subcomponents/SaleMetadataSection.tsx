@@ -152,30 +152,23 @@ export const SaleMetadataSection: React.FC<SaleMetadataSectionProps> = ({
           </div>
 
           <div className="sm:col-span-1">
-            {isModuleEnabled("vendedores") ? (
-              <Select
-                label="Vendedor *"
-                name="sellerId"
-                value={formData.sellerId}
-                onChange={handleFormChange}
-                required
-                className="text-xs rounded-xl h-9"
-              >
-                <option value="">Seleccionar...</option>
-                {sellers.map((s) => (
-                  <option key={s.id} value={String(s.id)}>
-                    {s.name}
-                  </option>
-                ))}
-              </Select>
-            ) : (
-              <Input
-                label="Comprobante"
-                value="Ticket de Venta"
-                disabled
-                className="text-xs rounded-xl h-9 bg-muted"
-              />
-            )}
+            <Select
+              label="Vendedor *"
+              name="sellerId"
+              value={formData.sellerId}
+              onChange={handleFormChange}
+              required
+              className="text-xs rounded-xl h-9"
+            >
+              <option value="">
+                {sellers.length > 0 ? "Seleccionar..." : "Sin vendedores configurados"}
+              </option>
+              {sellers.map((s) => (
+                <option key={s.id} value={String(s.id)}>
+                  {s.name}
+                </option>
+              ))}
+            </Select>
           </div>
 
           {isModuleEnabled("combos_promociones") && (

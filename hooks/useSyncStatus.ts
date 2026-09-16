@@ -2,11 +2,38 @@
 
 import { useState, useEffect, useCallback } from "react";
 
+export type SyncBreakdown = { entity: string; operation: string; count: number };
+
+const SYNC_ENTITY_LABELS: Record<string, string> = {
+  Product: "productos",
+  ProductBranchStock: "stock",
+  WebOrder: "pedidos web",
+  Sale: "ventas",
+  Purchase: "compras",
+  StockTransfer: "transferencias",
+  ProductModifierGroup: "opciones de productos",
+  Combo: "combos",
+  Promotion: "promociones",
+};
+
+const SYNC_OPERATION_LABELS: Record<string, string> = {
+  UPSERT: "actualizaciones",
+  DELETE: "eliminaciones",
+};
+
+export function formatSyncBreakdown(item: SyncBreakdown): string {
+  const operation = SYNC_OPERATION_LABELS[item.operation] || "cambios";
+  const entity = SYNC_ENTITY_LABELS[item.entity] || item.entity.toLowerCase();
+  return `${item.count} ${operation} de ${entity}`;
+}
+
 // Estado de conectividad + operaciones pendientes del outbox para el banner offline.
 export function useSyncStatus() {
   const [online, setOnline] = useState<boolean>(true);
   const [pendingSync, setPendingSync] = useState<number>(0);
   const [lastSync, setLastSync] = useState<string>("");
+  const [pendingBreakdown, setPendingBreakdown] = useState<SyncBreakdown[]>([]);
+  const [openConflicts, setOpenConflicts] = useState<number>(0);
 
   useEffect(() => {
     const isOnline = () =>
@@ -32,6 +59,8 @@ export function useSyncStatus() {
       const data = await res.json();
       if (typeof data.pendingSync === "number") setPendingSync(data.pendingSync);
       if (typeof data.lastSync === "string") setLastSync(data.lastSync);
+      if (Array.isArray(data.pendingBreakdown)) setPendingBreakdown(data.pendingBreakdown);
+      if (typeof data.openConflicts === "number") setOpenConflicts(data.openConflicts);
     } catch {
       // sin red: mantener estado actual
     }
@@ -48,5 +77,5 @@ export function useSyncStatus() {
     };
   }, [refreshStatus]);
 
-  return { online, pendingSync, lastSync, refreshStatus };
+  return { online, pendingSync, pendingBreakdown, openConflicts, lastSync, refreshStatus };
 }

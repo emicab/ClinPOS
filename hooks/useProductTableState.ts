@@ -56,42 +56,46 @@ export function useProductTableState() {
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    const fetchFilterOptions = async () => {
-      try {
-        const [brandsRes, categoriesRes, suppliersRes, branchesRes] = await Promise.all([
-          fetch("/api/brands"),
-          fetch("/api/categories"),
-          fetch("/api/proveedores"),
-          fetch("/api/branches"),
-        ]);
-        if (!brandsRes.ok || !categoriesRes.ok || !suppliersRes.ok)
-          throw new Error("Error al cargar opciones de filtro.");
+  // Opciones de los dropdowns de filtro. Se expone como callback para
+  // poder refrescarlas tras importar CSV o crear marcas/categorías/
+  // proveedores (si no, lo recién creado no aparece hasta recargar).
+  const fetchFilterOptions = useCallback(async () => {
+    try {
+      const [brandsRes, categoriesRes, suppliersRes, branchesRes] = await Promise.all([
+        fetch("/api/brands"),
+        fetch("/api/categories"),
+        fetch("/api/proveedores"),
+        fetch("/api/branches"),
+      ]);
+      if (!brandsRes.ok || !categoriesRes.ok || !suppliersRes.ok)
+        throw new Error("Error al cargar opciones de filtro.");
 
-        setBrands(await brandsRes.json());
-        setCategories(await categoriesRes.json());
-        setSuppliers(await suppliersRes.json());
-        if (branchesRes.ok) {
-          const list: Branch[] = await branchesRes.json();
-          setBranches(list);
-          // Validar la sucursal guardada contra la lista real: el localStorage
-          // es por PC (no por negocio) y puede traer un id de otro negocio o
-          // de una sucursal eliminada → forzar global en ese caso. Con 0-1
-          // sucursales el filtro es innecesario: siempre global.
-          const stored = localStorage.getItem("clinpos_active_branch_id");
-          const valid =
-            stored &&
-            list.length > 1 &&
-            list.some((b) => String(b.id) === String(stored));
-          setFilters((prev) => ({ ...prev, branchId: valid ? String(stored) : "" }));
-        }
-      } catch (err: any) {
-        console.error("Filtro-Error:", err);
-        setError("No se pudieron cargar las opciones de filtro.");
+      setBrands(await brandsRes.json());
+      setCategories(await categoriesRes.json());
+      setSuppliers(await suppliersRes.json());
+      if (branchesRes.ok) {
+        const list: Branch[] = await branchesRes.json();
+        setBranches(list);
+        // Validar la sucursal guardada contra la lista real: el localStorage
+        // es por PC (no por negocio) y puede traer un id de otro negocio o
+        // de una sucursal eliminada → forzar global en ese caso. Con 0-1
+        // sucursales el filtro es innecesario: siempre global.
+        const stored = localStorage.getItem("clinpos_active_branch_id");
+        const valid =
+          stored &&
+          list.length > 1 &&
+          list.some((b) => String(b.id) === String(stored));
+        setFilters((prev) => ({ ...prev, branchId: valid ? String(stored) : "" }));
       }
-    };
-    fetchFilterOptions();
+    } catch (err: any) {
+      console.error("Filtro-Error:", err);
+      setError("No se pudieron cargar las opciones de filtro.");
+    }
   }, []);
+
+  useEffect(() => {
+    fetchFilterOptions();
+  }, [fetchFilterOptions]);
 
   const fetchProducts = useCallback(
     async (pageNum = 1) => {
@@ -203,6 +207,7 @@ export function useProductTableState() {
     totalPages,
     totalProducts,
     fetchProducts,
+    fetchFilterOptions,
     isCSVModalOpen,
     setIsCSVModalOpen,
     isTransferModalOpen,

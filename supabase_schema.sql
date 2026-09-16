@@ -695,3 +695,38 @@ BEGIN
 END $$;
 
 GRANT EXECUTE ON FUNCTION decrement_recipe_stock(TEXT, INTEGER, NUMERIC, INTEGER) TO anon, authenticated;
+
+-- Movimiento de stock idempotente: evita doble aplicación en reintentos.
+CREATE TABLE IF NOT EXISTS "SyncStockMovement" (
+    "tenant_id" TEXT NOT NULL,
+    "operation_id" TEXT NOT NULL,
+    "productId" BIGINT NOT NULL,
+    "branchId" BIGINT,
+    "delta" NUMERIC NOT NULL,
+    "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    PRIMARY KEY ("tenant_id", "operation_id")
+);
+
+CREATE OR REPLACE FUNCTION apply_stock_movement(
+    p_tenant_id TEXT, p_operation_id TEXT, p_product_id INTEGER,
+    p_delta NUMERIC, p_branch_id INTEGER DEFAULT NULL
+) RETURNS BOOLEAN LANGUAGE plpgsql AS $$
+DECLARE inserted_count INTEGER;
+BEGIN
+    INSERT INTO "SyncStockMovement" ("tenant_id", "operation_id", "productId", "branchId", "delta")
+    VALUES (p_tenant_id, p_operation_id, p_product_id, p_branch_id, p_delta)
+    ON CONFLICT ("tenant_id", "operation_id") DO NOTHING;
+    GET DIAGNOSTICS inserted_count = ROW_COUNT;
+    IF inserted_count = 0 THEN RETURN TRUE; END IF;
+    UPDATE "Product" SET "quantityStock" = "quantityStock" + p_delta, "updatedAt" = NOW()
+      WHERE "tenant_id" = p_tenant_id AND "id" = p_product_id;
+    IF NOT FOUND THEN RAISE EXCEPTION 'Producto inexistente: %', p_product_id; END IF;
+    IF p_branch_id IS NOT NULL THEN
+      INSERT INTO "ProductBranchStock" ("tenant_id", "productId", "branchId", "quantityStock", "createdAt", "updatedAt")
+      VALUES (p_tenant_id, p_product_id, p_branch_id, p_delta, NOW(), NOW())
+      ON CONFLICT ("tenant_id", "productId", "branchId")
+      DO UPDATE SET "quantityStock" = "ProductBranchStock"."quantityStock" + p_delta, "updatedAt" = NOW();
+    END IF;
+    RETURN TRUE;
+END $$;
+GRANT EXECUTE ON FUNCTION apply_stock_movement(TEXT, TEXT, INTEGER, NUMERIC, INTEGER) TO anon, authenticated;

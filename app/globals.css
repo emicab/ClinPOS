@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 * {
-  font-family: var(--font-outfit), sans-serif;
+  font-family: "Segoe UI", Arial, sans-serif;
 }
 
 @theme {

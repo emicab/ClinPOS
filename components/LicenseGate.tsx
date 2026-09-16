@@ -34,8 +34,15 @@ const LicenseGate: React.FC<LicenseGateProps> = ({ children }) => {
                 setIsLicensed(hasLicense);
                 setIsFree(!hasLicense && isFreeMode);
             } else {
+                // Un 403 es un problema de autenticación del servidor local,
+                // no una condición para reintentar indefinidamente.
+                if (res.status === 403) {
+                    console.warn('Servidor local no autenticado. Se detiene el reintento automático.');
+                    setIsLoading(false);
+                    return;
+                }
                 console.warn('API returned non-OK status');
-                setTimeout(checkLicense, 1000);
+                setTimeout(checkLicense, 2000);
                 return;
             }
         } catch (e) {

@@ -75,6 +75,12 @@ export default async function handler(
         });
       }
 
+      // Desvincular productos antes de eliminar (evita error de FK).
+      await prisma.product.updateMany({
+        where: { supplierId: id },
+        data: { supplierId: null },
+      });
+
       await prisma.supplier.delete({
         where: { id },
       });

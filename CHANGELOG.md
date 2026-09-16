@@ -86,3 +86,8 @@ Todos los cambios notables realizados en el proyecto están detallados a continu
 - **F8 (Strict Build Mode)**: Reactivado el bloqueo por advertencias TypeScript y ESLint durante el proceso de build.
 - **F9 (StatCard text color)**: Modificado `StatCard` para heredar clases de color inyectadas de su contenedor.
 - **F10 (Redirects de Formulario)**: Reactivados redireccionamientos automáticos tras la modificación/creación de productos.
+## [1.17.0] - 2026-09-16
+
+- Corrección del cierre completo de Node.js durante las actualizaciones.
+- Limpieza de procesos huérfanos antes y después de instalar una actualización.
+- Mejoras de sincronización offline y movimientos de stock idempotentes.

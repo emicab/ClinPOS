@@ -5,7 +5,7 @@
 // funciones para no crear ciclos ni chunks rotos en dev.
 import prisma from "./prisma";
 import { isProDevice } from "./branchIdentity";
-import { isCloudNewer } from "./syncConflict";
+import { isCloudNewer, recordSyncConflict } from "./syncConflict";
 
 const fmtDec = (val: any, fallback: string | null = "0.00") => (val !== undefined && val !== null ? val.toString() : fallback);
 
@@ -295,6 +295,8 @@ export interface SyncPhaseContext {
   productIdsToRecalc: Set<number>;
 }
 
+export type SyncCursors = Record<string, string>;
+
 interface SyncEntities {
   branches: any[];
   branchStocks: any[];
@@ -370,55 +372,61 @@ export async function bootstrapBranchStocks(mainBranchId: number | null): Promis
 }
 
 // Carga todas las entidades locales modificadas desde el último watermark.
-export async function loadLocalEntities(lastSync: Date, forceFullSync: boolean): Promise<SyncEntities> {
-  const whereRecent = forceFullSync ? {} : { updatedAt: { gt: lastSync } };
+export async function loadLocalEntities(lastSync: Date, forceFullSync: boolean, cursors: SyncCursors = {}): Promise<SyncEntities> {
+  const cursorFor = (entity: string): Date => {
+    if (forceFullSync) return new Date(0);
+    const parsed = cursors[entity] ? new Date(cursors[entity]) : lastSync;
+    return Number.isNaN(parsed.getTime()) ? lastSync : parsed;
+  };
+  const recent = (entity: string) => ({ updatedAt: { gt: cursorFor(entity) } });
   return {
-    branches: await prisma.branch.findMany({ where: whereRecent }),
-    branchStocks: await prisma.productBranchStock.findMany({ where: whereRecent }),
-    stockTransfers: await prisma.stockTransfer.findMany({ where: forceFullSync ? {} : { createdAt: { gt: lastSync } } }),
+    branches: await prisma.branch.findMany({ where: recent("Branch") }),
+    branchStocks: await prisma.productBranchStock.findMany({ where: recent("ProductBranchStock") }),
+    stockTransfers: await prisma.stockTransfer.findMany({ where: forceFullSync ? {} : { createdAt: { gt: cursorFor("StockTransfer") } } }),
     stockTransferItems: await prisma.stockTransferItem.findMany(),
-    brands: await prisma.brand.findMany(),
-    categories: await prisma.category.findMany(),
-    suppliers: await prisma.supplier.findMany(),
-    discountCodes: await prisma.discountCode.findMany({ where: whereRecent }),
+    // Evita volver a subir el catálogo completo en cada ciclo incremental.
+    brands: await prisma.brand.findMany({ where: recent("Brand") }),
+    categories: await prisma.category.findMany({ where: recent("Category") }),
+    suppliers: await prisma.supplier.findMany({ where: recent("Supplier") }),
+    discountCodes: await prisma.discountCode.findMany({ where: recent("DiscountCode") }),
     promotions: await prisma.promotion.findMany({
-      where: whereRecent,
+      where: recent("Promotion"),
       include: { conditions: { include: { product: true, category: true } } }
     }),
-    clients: await prisma.client.findMany({ where: whereRecent }),
-    sellers: await prisma.seller.findMany({ where: whereRecent }),
-    users: await prisma.user.findMany({ where: whereRecent }),
-    products: await prisma.product.findMany({ where: whereRecent }),
+    clients: await prisma.client.findMany({ where: recent("Client") }),
+    sellers: await prisma.seller.findMany({ where: recent("Seller") }),
+    users: await prisma.user.findMany({ where: recent("User") }),
+    products: await prisma.product.findMany({ where: recent("Product") }),
     recipeItems: await prisma.recipeItem.findMany({
-      where: forceFullSync ? {} : { product: { updatedAt: { gt: lastSync } } },
+      where: forceFullSync ? {} : { product: { updatedAt: { gt: cursorFor("Product") } } },
       orderBy: { ingredientId: "asc" },
     }),
-    cashRegisters: await prisma.cashRegister.findMany({ where: whereRecent }),
-    accountBalances: await prisma.accountBalance.findMany({ where: whereRecent }),
-    combos: await prisma.combo.findMany({ where: whereRecent }),
-    sales: await prisma.sale.findMany({ where: whereRecent }),
+    cashRegisters: await prisma.cashRegister.findMany({ where: recent("CashRegister") }),
+    accountBalances: await prisma.accountBalance.findMany({ where: recent("AccountBalance") }),
+    combos: await prisma.combo.findMany({ where: recent("Combo") }),
+    sales: await prisma.sale.findMany({ where: recent("Sale") }),
     saleItems: await prisma.saleItem.findMany({
-      where: forceFullSync ? {} : { sale: { updatedAt: { gt: lastSync } } }
+      where: forceFullSync ? {} : { sale: { updatedAt: { gt: cursorFor("Sale") } } }
     }),
-    purchases: await prisma.purchase.findMany({ where: whereRecent }),
+    purchases: await prisma.purchase.findMany({ where: recent("Purchase") }),
     purchaseItems: await prisma.purchaseItem.findMany({
-      where: forceFullSync ? {} : { purchase: { updatedAt: { gt: lastSync } } }
+      where: forceFullSync ? {} : { purchase: { updatedAt: { gt: cursorFor("Purchase") } } }
     }),
-    expenses: await prisma.expense.findMany({ where: whereRecent }),
-    cashMovements: await prisma.cashMovement.findMany({ where: forceFullSync ? {} : { createdAt: { gt: lastSync } } }),
-    accountMovements: await prisma.accountMovement.findMany({ where: forceFullSync ? {} : { createdAt: { gt: lastSync } } }),
+    expenses: await prisma.expense.findMany({ where: recent("Expense") }),
+    cashMovements: await prisma.cashMovement.findMany({ where: forceFullSync ? {} : { createdAt: { gt: cursorFor("CashMovement") } } }),
+    accountMovements: await prisma.accountMovement.findMany({ where: forceFullSync ? {} : { createdAt: { gt: cursorFor("AccountMovement") } } }),
     comboItems: await prisma.comboItem.findMany({
-      where: forceFullSync ? {} : { combo: { updatedAt: { gt: lastSync } } },
+      where: forceFullSync ? {} : { combo: { updatedAt: { gt: cursorFor("Combo") } } },
       include: { product: true }
     }),
-    webOrders: await prisma.webOrder.findMany({ where: whereRecent, include: { items: true } }),
+    webOrders: await prisma.webOrder.findMany({ where: recent("WebOrder"), include: { items: true } }),
     storeConfigs: await prisma.storeConfig.findMany(),
     modifierGroups: await prisma.productModifierGroup.findMany({
-      where: forceFullSync ? {} : { product: { updatedAt: { gt: lastSync } } },
+      where: forceFullSync ? {} : { product: { updatedAt: { gt: cursorFor("Product") } } },
       orderBy: { id: "asc" },
     }),
     modifierOptions: await prisma.productModifierOption.findMany({
-      where: forceFullSync ? {} : { modifierGroup: { updatedAt: { gt: lastSync } } },
+      where: forceFullSync ? {} : { modifierGroup: { updatedAt: { gt: cursorFor("ProductModifierGroup") } } },
       orderBy: { id: "asc" },
       include: { modifierGroup: { select: { id: true, productId: true } } },
     }),
@@ -1077,6 +1085,26 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
       }
     }
 
+    const resSeller = await fetch(`${supabaseUrl}/rest/v1/Seller?${tenantParam}&select=*`, { headers });
+    if (resSeller.ok) {
+      const cloudSellers = await resSeller.json();
+      for (const s of cloudSellers) {
+        const sellerData = {
+          name: s.name,
+          email: s.email || null,
+          phone: s.phone || null,
+          isActive: s.isActive !== false,
+          updatedAt: new Date(s.updatedAt),
+        };
+        const existingSeller = await prisma.seller.findUnique({ where: { id: s.id }, select: { updatedAt: true } });
+        if (!existingSeller) {
+          await prisma.seller.create({ data: { id: s.id, ...sellerData } });
+        } else if (isCloudNewer(s.updatedAt, existingSeller.updatedAt)) {
+          await prisma.seller.update({ where: { id: s.id }, data: sellerData });
+        }
+      }
+    }
+
     const resBr = await fetch(`${supabaseUrl}/rest/v1/Brand?${tenantParam}&select=*`, { headers });
     if (resBr.ok) {
       const cloudBrands = await resBr.json();
@@ -1126,6 +1154,7 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
       }
     }
 
+    const cloudProductIdToLocalId = new Map<number, number>();
     const cloudProducts = await fetchAllRows(`${supabaseUrl}/rest/v1/Product?${tenantParam}&select=*`, headers);
     if (cloudProducts) {
       for (const p of cloudProducts) {
@@ -1152,13 +1181,40 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
           const existingBySku = await prisma.product.findUnique({ where: { sku: skuValue }, select: { id: true } });
           if (existingBySku) productId = existingBySku.id;
         }
+        cloudProductIdToLocalId.set(Number(p.id), Number(productId));
 
         // "Último escritor gana": no pisar cambios locales más recientes que la nube.
         const existingProduct = await prisma.product.findUnique({
           where: { id: productId },
-          select: { updatedAt: true }
+          select: {
+            id: true, name: true, sku: true, description: true,
+            pricePurchase: true, priceSale: true, quantityStock: true,
+            stockMinAlert: true, unitType: true, isPublicWeb: true,
+            webCategory: true, webUnavailable: true, imageUrl: true,
+            brandId: true, categoryId: true, supplierId: true,
+            isRecipe: true, isIngredient: true, updatedAt: true,
+          }
         });
         if (existingProduct && !isCloudNewer(p.updatedAt, existingProduct.updatedAt)) {
+          const remoteUpdatedAt = new Date(p.updatedAt);
+          if (remoteUpdatedAt > ctx.lastSync && existingProduct.updatedAt > ctx.lastSync) {
+            await recordSyncConflict({
+              entity: "Product",
+              entityKey: String(productId),
+              localVersion: existingProduct.updatedAt,
+              remoteVersion: remoteUpdatedAt,
+              localPayload: {
+                ...existingProduct,
+                pricePurchase: existingProduct.pricePurchase.toString(),
+                priceSale: existingProduct.priceSale.toString(),
+              },
+              remotePayload: {
+                ...p,
+                pricePurchase: p.pricePurchase?.toString?.() ?? p.pricePurchase,
+                priceSale: p.priceSale?.toString?.() ?? p.priceSale,
+              },
+            });
+          }
           productIdsToRecalc.add(productId);
           continue;
         }
@@ -1205,28 +1261,47 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
       console.log(`[Sync] Pulled ${cloudPBS.length} ProductBranchStock records from Supabase.`);
       let skippedPbs = 0;
       for (const bs of cloudPBS) {
-        const productExists = await prisma.product.findUnique({ where: { id: bs.productId }, select: { id: true } });
+        const localProductId = cloudProductIdToLocalId.get(Number(bs.productId)) ?? Number(bs.productId);
+        const productExists = await prisma.product.findUnique({ where: { id: localProductId }, select: { id: true } });
         const branchExists = await prisma.branch.findUnique({ where: { id: bs.branchId }, select: { id: true } });
         if (!productExists || !branchExists) {
           skippedPbs++;
           continue;
         }
         const existingPbs = await prisma.productBranchStock.findUnique({
-          where: { productId_branchId: { productId: bs.productId, branchId: bs.branchId } },
-          select: { updatedAt: true }
+          where: { productId_branchId: { productId: localProductId, branchId: bs.branchId } },
+          select: { productId: true, branchId: true, quantityStock: true, minStock: true, createdAt: true, updatedAt: true }
         });
         // "Último escritor gana": no pisar un stock local más reciente que la nube.
         if (existingPbs && !isCloudNewer(bs.updatedAt, existingPbs.updatedAt)) {
+          const remoteUpdatedAt = new Date(bs.updatedAt);
+          if (remoteUpdatedAt > ctx.lastSync && existingPbs.updatedAt > ctx.lastSync) {
+            await recordSyncConflict({
+              entity: "ProductBranchStock",
+                entityKey: `${localProductId}:${bs.branchId}`,
+              localVersion: existingPbs.updatedAt,
+              remoteVersion: remoteUpdatedAt,
+              localPayload: existingPbs,
+              remotePayload: {
+                productId: bs.productId,
+                branchId: bs.branchId,
+                quantityStock: bs.quantityStock,
+                minStock: bs.minStock,
+                createdAt: bs.createdAt,
+                updatedAt: bs.updatedAt,
+              },
+            });
+          }
           continue;
         }
         await prisma.productBranchStock.upsert({
           where: {
-            productId_branchId: { productId: bs.productId, branchId: bs.branchId }
+            productId_branchId: { productId: localProductId, branchId: bs.branchId }
           },
           update: { quantityStock: bs.quantityStock, updatedAt: new Date(bs.updatedAt) },
-          create: { productId: bs.productId, branchId: bs.branchId, quantityStock: bs.quantityStock, updatedAt: new Date(bs.updatedAt) }
+          create: { productId: localProductId, branchId: bs.branchId, quantityStock: bs.quantityStock, updatedAt: new Date(bs.updatedAt) }
         });
-        productIdsToRecalc.add(bs.productId);
+        productIdsToRecalc.add(localProductId);
       }
       if (skippedPbs > 0) console.warn(`[Sync] PBS: ${skippedPbs} filas omitidas (producto o sucursal inexistente localmente).`);
     } else {

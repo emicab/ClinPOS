@@ -159,7 +159,10 @@ export const useSaleState = () => {
         const configData = configRes.ok ? await configRes.json() : {};
         setConfig(configData);
 
-        const showVendedores = isModuleEnabled("vendedores");
+        // El vendedor es obligatorio para registrar una venta; cargarlo aun
+        // cuando falle la configuración de módulos evita que producción oculte
+        // el selector por un error de sincronización/configuración.
+        const showVendedores = true;
         const showCombos = isModuleEnabled("combos_promociones");
 
         const [sellersData, cajaData, combosData, promosData] =
@@ -190,16 +193,21 @@ export const useSaleState = () => {
         setSellers(normalizedSellers);
         setHasOpenCaja(!!cajaData.open);
 
-        const defaultSellerId = cajaData.open?.seller?.id
+        const currentSellerIsValid = normalizedSellers.some(
+          (seller) => String(seller.id) === String(formData.sellerId),
+        );
+        const defaultSellerId = cajaData.open?.seller?.id && normalizedSellers.some(
+          (seller) => String(seller.id) === String(cajaData.open.seller.id),
+        )
           ? String(cajaData.open.seller.id)
           : normalizedSellers.length > 0
           ? String(normalizedSellers[0].id)
           : "";
 
-        if (defaultSellerId) {
+        if (defaultSellerId && !currentSellerIsValid) {
           setFormData((prev) => ({
             ...prev,
-            sellerId: prev.sellerId || defaultSellerId,
+            sellerId: defaultSellerId,
           }));
         }
 
@@ -529,27 +537,54 @@ export const useSaleState = () => {
 
   // Escaneo de código de barras INYECTANDO SUCURSAL
   const handleProductKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter" && barcodeInput.current.length > 0) {
-      e.preventDefault();
-      const code = barcodeInput.current;
-      barcodeInput.current = "";
-      fetch(`/api/products?search=${encodeURIComponent(code)}${activeBranchIdStr ? `&branchId=${activeBranchIdStr}` : ''}`)
-        .then((res) => (res.ok ? res.json() : []))
-        .then((data) => {
-          const product = data?.[0];
-          if (product)
-            handleSelectProduct({
-              ...product,
-              priceSale: parseFloat(product.priceSale),
-              // PISAMOS quantityStock con el valor local
-              quantityStock: getLocalStock(product),
-            });
-          else toast.error(`Producto con código "${code}" no encontrado.`);
-        })
-        .catch(() =>
-          toast.error("Error al buscar producto por código de barras."),
-        );
+    if (e.key !== "Enter") return;
+
+    const term = productSearchTerm.trim();
+    if (!term) return;
+
+    // Enter en el buscador siempre selecciona un producto. Esto permite que
+    // el lector de barras (que normalmente envía código + Enter) y la
+    // búsqueda por nombre compartan exactamente el mismo flujo.
+    e.preventDefault();
+    barcodeInput.current = "";
+
+    const normalizedTerm = term.toLocaleLowerCase();
+    const exactVisible = searchedProducts.find(
+      (product) => product.sku?.trim().toLocaleLowerCase() === normalizedTerm,
+    );
+    const visibleProduct = exactVisible || searchedProducts[0];
+
+    if (visibleProduct) {
+      handleSelectProduct(visibleProduct);
+      return;
     }
+
+    // Si se presiona Enter antes de que termine la búsqueda (común con un
+    // escáner), hacemos una última consulta y solo agregamos una coincidencia
+    // exacta por SKU o un único resultado.
+    fetch(`/api/products?search=${encodeURIComponent(term)}${activeBranchIdStr ? `&branchId=${activeBranchIdStr}` : ''}`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) => {
+        const products = Array.isArray(data) ? data : [];
+        const exact = products.find(
+          (product: any) => product.sku?.trim().toLocaleLowerCase() === normalizedTerm,
+        );
+        const product = exact || (products.length === 1 ? products[0] : null);
+
+        if (product) {
+          handleSelectProduct({
+            ...product,
+            priceSale: parseFloat(product.priceSale),
+            // PISAMOS quantityStock con el valor local
+            quantityStock: getLocalStock(product),
+          });
+        } else if (products.length === 0) {
+          toast.error(`No se encontró un producto para "${term}".`);
+        } else {
+          toast.error("Hay varios productos. Elegí uno de la lista.");
+        }
+      })
+      .catch(() => toast.error("Error al buscar el producto."));
   };
 
   const addProductToCart = (product: Product, unitType: string) => {
@@ -817,11 +852,9 @@ export const useSaleState = () => {
       return;
     }
 
-    const activeSellerId = isModuleEnabled("vendedores")
-      ? formData.sellerId
-      : "1";
-    
-    if (!activeSellerId && isModuleEnabled("vendedores")) {
+    const activeSellerId = formData.sellerId;
+
+    if (!activeSellerId) {
       toast.error("Debes seleccionar un vendedor.");
       setIsLoading(false);
       return;

@@ -147,7 +147,9 @@ export function decryptText(encryptedText: string): string {
           return decrypted;
         } catch {
           console.warn("⚠️ No se pudo desencriptar el dato con ninguna clave conocida.");
-          return encryptedText;
+          // No devolver ENC::... como si fuera un secreto válido: eso provoca
+          // errores secundarios en ARCA, SMTP y otras integraciones.
+          return "";
         }
       }
     }

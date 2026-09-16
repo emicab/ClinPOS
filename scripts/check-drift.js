@@ -36,6 +36,15 @@ const FOCUS_MODELS = new Set([
   "SaleItem",
 ]);
 
+// Tablas internas del protocolo de sincronización: se validan desde health y
+// el migrador Tauri, pero no forman parte del grupo de modelos funcionales
+// que este script compara campo por campo contra el schema principal.
+const INTERNAL_SYNC_MODELS = new Set([
+  "SyncOutbox",
+  "SyncTombstone",
+  "SyncConflict",
+]);
+
 // Tipos que corresponden a una columna SQLite (los enums mapean a TEXT).
 const COLUMN_TYPES = new Set([
   "String",
@@ -124,7 +133,10 @@ function main() {
   }
 
   // Aviso (no bloquea): entradas del health que ya no existen en el schema.
-  const stale = [...healthPairs].filter((p) => !schemaPairs.has(p));
+  const stale = [...healthPairs].filter((p) => {
+    const model = p.split(".")[0];
+    return !schemaPairs.has(p) && !INTERNAL_SYNC_MODELS.has(model);
+  });
   if (stale.length > 0) {
     console.warn("[check-drift] Aviso: entradas obsoletas en health (no están en schema):");
     for (const f of stale.sort()) console.warn(`  - ${f}`);

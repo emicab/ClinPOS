@@ -11,10 +11,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const [pendingSync, lastSyncSetting, planSetting] = await Promise.all([
+    const [pendingSync, lastSyncSetting, planSetting, failedSync, openConflicts, pendingBreakdown] = await Promise.all([
       getPendingCount(),
       prisma.setting.findUnique({ where: { key: "supabase_last_sync" } }),
       prisma.setting.findUnique({ where: { key: "app_plan" } }),
+      prisma.syncOutbox.count({ where: { status: "FAILED" } }),
+      prisma.syncConflict.count({ where: { status: "OPEN" } }),
+      prisma.syncOutbox.groupBy({
+        by: ["entity", "operation"],
+        where: { status: "PENDING" },
+        _count: { _all: true },
+      }),
     ]);
 
     const isPro =
@@ -23,6 +30,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     res.status(200).json({
       pendingSync,
+      failedSync,
+      openConflicts,
+      pendingBreakdown: pendingBreakdown.map((item) => ({
+        entity: item.entity,
+        operation: item.operation,
+        count: item._count._all,
+      })),
       lastSync: lastSyncSetting?.value || "",
       isPro: !!isPro,
     });
