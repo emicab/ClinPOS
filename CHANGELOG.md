@@ -2,6 +2,11 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.17.3] - 2026-09-17
+
+### Corregido
+- **Carga de productos en combos**: búsqueda por nombre/SKU y cantidades por unidad correctamente interpretadas al usar kg, litros o unidades.
+
 ## [1.17.2] - 2026-09-16
 
 ### Corregido

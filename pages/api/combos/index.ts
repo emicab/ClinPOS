@@ -14,6 +14,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 select: {
                   id: true,
                   name: true,
+                  unitType: true,
                   quantityStock: true,
                   priceSale: true,
                 },
@@ -36,6 +37,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               product: i.product ? {
                 id: i.product.id,
                 name: i.product.name,
+                unitType: i.product.unitType,
                 priceSale: i.product.priceSale.toString(),
               } : null,
               quantity: i.quantity,
@@ -59,6 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             id: i.id,
             productId: i.productId,
             productName: i.product?.name || "Producto",
+            unitType: i.product?.unitType || "UNIT",
             quantity: i.quantity,
             priceSale: i.product ? i.product.priceSale.toString() : "0",
           };

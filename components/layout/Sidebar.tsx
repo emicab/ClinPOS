@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import Link from "next/link";
+import ReactMarkdown from "react-markdown";
 import pkg from "../../package.json";
 import { useModules } from "@/hooks/useModules";
 import {
@@ -898,7 +899,9 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
           {availableUpdate?.body && (
             <div className="mt-4 p-3 bg-muted rounded-md text-xs border border-border overflow-y-auto max-h-32">
               <strong className="block mb-1 text-foreground">Notas de la versión:</strong>
-              <div className="whitespace-pre-wrap">{availableUpdate.body}</div>
+              <div className="space-y-1 leading-relaxed [&_h1]:font-bold [&_h2]:font-bold [&_h3]:font-bold [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:list-decimal [&_ol]:pl-4 [&_strong]:font-bold">
+                <ReactMarkdown>{availableUpdate.body}</ReactMarkdown>
+              </div>
             </div>
           )}
         </div>

@@ -804,6 +804,7 @@ export const useSaleState = () => {
       availableStock: item.product ? getLocalStock(item.product) : 999,
       quantity: item.quantity,
       priceAtSale: item.customPrice ?? item.product?.priceSale ?? 0,
+      unitType: item.product?.unitType || "UNIT",
       tempId: batchId + item.productId,
       subtotal:
         (item.customPrice ?? item.product?.priceSale ?? 0) * item.quantity,

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import type { Product, Combo } from '@/types';
 import { Loader2, ArrowLeft, Search, X, Info } from 'lucide-react';
@@ -10,6 +10,9 @@ import { debounce } from '@/lib/utils';
 import { formatCurrency } from '@/lib/formatCurrency';
 import { optimizeImage } from '@/lib/imageOptimizer';
 import toast from 'react-hot-toast';
+
+const unitLabel = (unitType?: Product['unitType']) =>
+  unitType === 'WEIGHT' ? 'kg' : unitType === 'VOLUME' ? 'L' : 'unidad';
 
 const EditarComboPage = () => {
   const router = useRouter();
@@ -24,12 +27,13 @@ const EditarComboPage = () => {
   const [pricingMode, setPricingMode] = useState<'fixed' | 'percentage'>('fixed');
   const [fixedPrice, setFixedPrice] = useState('');
   const [discountPercent, setDiscountPercent] = useState('');
-  const [items, setItems] = useState<{ productId: number; productName: string; quantity: number; defaultPrice: number; customPrice: string }[]>([]);
+  const [items, setItems] = useState<{ productId: number; productName: string; unitType?: Product['unitType']; quantity: number; defaultPrice: number; customPrice: string }[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<Product[]>([]);
   const [searching, setSearching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!comboId) return;
@@ -46,6 +50,7 @@ const EditarComboPage = () => {
         setItems(data.items.map(i => ({
           productId: i.productId,
           productName: i.product?.name || `#${i.productId}`,
+          unitType: i.product?.unitType,
           quantity: i.quantity,
           defaultPrice: i.product?.priceSale ?? 0,
           customPrice: i.customPrice != null ? i.customPrice.toString() : '',
@@ -71,7 +76,7 @@ const EditarComboPage = () => {
             setSearchResults((data.products || data).map((p: any) => ({
               ...p,
               priceSale: parseFloat(p.priceSale),
-            })));
+            })).slice(0, 10));
           }
         } catch { /* ignore */ }
         finally { setSearching(false); }
@@ -118,10 +123,51 @@ const EditarComboPage = () => {
   };
 
   const addItem = (product: Product) => {
-    if (items.some(i => i.productId === product.id)) return;
-    setItems([...items, { productId: product.id, productName: product.name, quantity: 1, defaultPrice: product.priceSale, customPrice: '' }]);
+    if (items.some(i => i.productId === product.id)) {
+      toast.error(`"${product.name}" ya está incluido en el combo.`);
+      return;
+    }
+    setItems([...items, {
+      productId: product.id,
+      productName: product.name,
+      unitType: product.unitType,
+      quantity: product.unitType === 'UNIT' || !product.unitType ? 1 : 0.1,
+      defaultPrice: product.priceSale,
+      customPrice: '',
+    }]);
     setSearchTerm('');
     setSearchResults([]);
+    setTimeout(() => searchInputRef.current?.focus(), 0);
+  };
+
+  const handleProductSearchKeyDown = async (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== 'Enter' && e.code !== 'NumpadEnter') return;
+    e.preventDefault();
+    const term = e.currentTarget.value.trim();
+    if (!term) return;
+
+    const normalized = term.toLocaleLowerCase();
+    const exact = searchResults.find(p => p.sku?.trim().toLocaleLowerCase() === normalized);
+    const visible = exact || searchResults[0];
+    if (visible) {
+      addItem(visible);
+      return;
+    }
+
+    setSearching(true);
+    try {
+      const res = await fetch(`/api/products?search=${encodeURIComponent(term)}&limit=10`);
+      const data = res.ok ? await res.json() : [];
+      const products: Product[] = (data.products || data).map((p: any) => ({ ...p, priceSale: parseFloat(p.priceSale) })).slice(0, 10);
+      const exactProduct = products.find(p => p.sku?.trim().toLocaleLowerCase() === normalized);
+      if (exactProduct || products.length === 1) addItem(exactProduct || products[0]);
+      else if (products.length === 0) toast.error(`No se encontró un producto para "${term}".`);
+      else toast.error('Hay varios resultados. Elegí un producto de la lista.');
+    } catch {
+      toast.error('No se pudo buscar el producto.');
+    } finally {
+      setSearching(false);
+    }
   };
 
   const removeItem = (productId: number) => setItems(items.filter(i => i.productId !== productId));
@@ -132,7 +178,7 @@ const EditarComboPage = () => {
 
   const totalFullPrice = items.reduce((sum, i) => {
     const unitPrice = i.customPrice ? parseFloat(i.customPrice) : i.defaultPrice;
-    return sum + (unitPrice || 0) * (parseInt(i.quantity as any) || 0);
+    return sum + (unitPrice || 0) * (Number(i.quantity) || 0);
   }, 0);
 
   const effectivePrice = pricingMode === 'fixed'
@@ -159,7 +205,7 @@ const EditarComboPage = () => {
           active,
           items: items.map(i => ({
             productId: i.productId,
-            quantity: parseInt(i.quantity as any) || 1,
+            quantity: Number(i.quantity) || 1,
             customPrice: i.customPrice ? parseFloat(i.customPrice) : null,
           })),
         }),
@@ -269,8 +315,10 @@ const EditarComboPage = () => {
           <label className="block text-sm font-medium text-foreground mb-1">Productos</label>
           <div className="relative mb-3">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground-muted" />
-            <input type="text" placeholder="Buscar producto para agregar..." value={searchTerm}
+            <input ref={searchInputRef} type="text" placeholder="Escaneá un SKU o buscá por nombre..." value={searchTerm}
               onChange={e => setSearchTerm(e.target.value)}
+              onKeyDown={handleProductSearchKeyDown}
+              autoComplete="off"
               className="w-full pl-10 pr-4 py-2 rounded-md border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary/50" />
             {searching && <Loader2 size={16} className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-foreground-muted" />}
           </div>
@@ -280,7 +328,7 @@ const EditarComboPage = () => {
               {searchResults.map(p => (
                 <button key={p.id} type="button" onClick={() => addItem(p)}
                   className="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors flex justify-between">
-                  <span>{p.name}</span>
+                  <span>{p.name} <small className="text-foreground-muted">({unitLabel(p.unitType)}{p.sku ? ` · SKU ${p.sku}` : ''})</small></span>
                   <span className="text-foreground-muted">{formatCurrency(p.priceSale)}</span>
                 </button>
               ))}
@@ -292,9 +340,10 @@ const EditarComboPage = () => {
               <div key={item.productId} className="flex items-center gap-2 bg-background p-2 rounded-md border border-border">
                 <span className="flex-1 text-sm font-medium">
                   {item.productName}
-                  <span className="text-foreground-muted text-xs ml-1">({formatCurrency(item.defaultPrice)} c/u)</span>
+                  <span className="text-foreground-muted text-xs ml-1">({formatCurrency(item.defaultPrice)} / {unitLabel(item.unitType)})</span>
                 </span>
-                <input type="number" min="1" value={item.quantity} onChange={e => updateItem(item.productId, 'quantity', e.target.value)}
+                <span className="text-[10px] font-semibold text-primary bg-primary/10 rounded px-1.5 py-1">{unitLabel(item.unitType)}</span>
+                <input type="number" min={item.unitType === 'UNIT' || !item.unitType ? '1' : '0.001'} step={item.unitType === 'UNIT' || !item.unitType ? '1' : '0.001'} value={item.quantity} onChange={e => updateItem(item.productId, 'quantity', e.target.value)}
                   className="w-16 text-center text-sm rounded border border-border bg-background p-1" title="Cantidad" />
                 <input type="number" step="0.01" min="0" value={item.customPrice}
                   onChange={e => updateItem(item.productId, 'customPrice', e.target.value)}
