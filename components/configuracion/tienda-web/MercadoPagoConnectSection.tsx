@@ -14,6 +14,9 @@ interface MercadoPagoConnectSectionProps {
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   saving: boolean;
   storeBase: string;
+  // Estado real de vinculación (GET /api/mercadopago/status). null = cargando:
+  // se usa el token del form como fallback para no parpadear.
+  mpConnected: boolean | null;
   onOpenChangeModal: () => void;
   onDisconnectMp: () => void;
 }
@@ -23,9 +26,12 @@ export function MercadoPagoConnectSection({
   onChange,
   saving,
   storeBase,
+  mpConnected,
   onOpenChangeModal,
   onDisconnectMp,
 }: MercadoPagoConnectSectionProps) {
+  const isConnected =
+    mpConnected ?? Boolean(formData.mpAccessToken?.trim());
   return (
     <div className="bg-muted p-6 rounded-xl border border-border space-y-4">
       <div className="flex items-center justify-between">
@@ -62,7 +68,7 @@ export function MercadoPagoConnectSection({
           <button
             type="button"
             onClick={() => {
-              if (formData.mpAccessToken?.trim()) {
+              if (isConnected) {
                 onOpenChangeModal();
               } else {
                 const url = `https://${storeBase}/api/mercadopago/connect?tenant_id=${encodeURIComponent(formData.slug || "mi-tienda")}`;
@@ -73,11 +79,11 @@ export function MercadoPagoConnectSection({
             }}
             className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors inline-flex items-center gap-1.5 cursor-pointer"
           >
-            {formData.mpAccessToken?.trim()
+            {isConnected
               ? "Cambiar cuenta conectada (OAuth 2.0)"
               : "Conectar Mercado Pago (OAuth 2.0) 🔗"}
           </button>
-          {formData.mpAccessToken?.trim() ? (
+          {isConnected ? (
             <button
               type="button"
               onClick={onDisconnectMp}

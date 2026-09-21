@@ -42,6 +42,28 @@ import {
 
 const SYNC_CURSORS_SETTING = "supabase_sync_cursors";
 
+// Solo metadatos del JWT (rol/ref/longitud). Nunca loguear el secreto.
+function describeSupabaseKey(key: string): { role: string | null; ref: string | null; len: number } {
+  const len = key?.length || 0;
+  try {
+    const parts = key.split(".");
+    if (parts.length < 2) return { role: null, ref: null, len };
+    const payload = JSON.parse(Buffer.from(parts[1], "base64").toString("utf-8"));
+    return {
+      role: typeof payload.role === "string" ? payload.role : null,
+      ref: typeof payload.ref === "string" ? payload.ref : null,
+      len,
+    };
+  } catch {
+    return { role: null, ref: null, len };
+  }
+}
+
+function extractSupabaseRef(url: string): string | null {
+  const m = url.match(/^https?:\/\/([a-z0-9]+)\.supabase\.co/i);
+  return m ? m[1] : null;
+}
+
 function parseSyncCursors(value?: string): SyncCursors {
   if (!value) return {};
   try {
@@ -56,7 +78,9 @@ async function loadConfigFromDb(): Promise<Record<string, string>> {
   const settings = await prisma.setting.findMany();
   const config: Record<string, string> = {};
   for (const s of settings) {
-    config[s.key] = s.value;
+    // Los valores de Setting se guardan sin trim (a diferencia de envLoader).
+    // Un service_role con espacios o salto de línea da 401 global en PostgREST.
+    config[s.key] = typeof s.value === "string" ? s.value.trim() : s.value;
   }
   // Overlay de settings a nivel máquina (licencia, plan, credenciales Supabase)
   // para que el sync use las mismas credenciales en todos los negocios.
@@ -74,8 +98,31 @@ export async function getSelectiveSyncCredentials(): Promise<{
 }> {
   const config = await loadConfigFromDb();
 
-  const supabaseUrl = config.supabase_url || process.env.NEXT_PUBLIC_SUPABASE_URL || "";
-  const supabaseKey = config.supabase_service_role_key || process.env.SUPABASE_SERVICE_ROLE_KEY || config.supabase_anon_key || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+  const supabaseUrl = (config.supabase_url || process.env.NEXT_PUBLIC_SUPABASE_URL || "").trim();
+  const serviceRoleFromDb = (config.supabase_service_role_key || "").trim();
+  const serviceRoleFromEnv = (process.env.SUPABASE_SERVICE_ROLE_KEY || "").trim();
+  const anonFromDb = (config.supabase_anon_key || "").trim();
+  const anonFromEnv = (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "").trim();
+  const supabaseKey = serviceRoleFromDb || serviceRoleFromEnv || anonFromDb || anonFromEnv;
+  const keySource = serviceRoleFromDb ? "setting:supabase_service_role_key"
+    : serviceRoleFromEnv ? "env:SUPABASE_SERVICE_ROLE_KEY"
+    : anonFromDb ? "setting:supabase_anon_key"
+    : "env:anon/publishable";
+
+  // Diagnóstico sin exponer el secreto: rol + ref del JWT y longitud.
+  // StoreConfig es la única tabla con REVOKE por columna (mpAccessToken,
+  // peyaWebhookSecret): con anon key el upsert/pull de esa tabla da 401
+  // aunque el resto pase. Ver sql/20260810_hardening_stock_mp.sql.
+  const keyInfo = describeSupabaseKey(supabaseKey);
+  const urlRef = extractSupabaseRef(supabaseUrl);
+  if (keyInfo.role === "anon") {
+    console.warn(`[Sync] Credencial efectiva: anon (${keySource}). StoreConfig requiere service_role por el hardening de mpAccessToken/peyaWebhookSecret; con anon el sync de esa tabla falla con 401. Configure supabase_service_role_key a nivel máquina.`);
+  } else if (keyInfo.role) {
+    console.log(`[Sync] Credencial efectiva: ${keyInfo.role} (${keySource}, len=${keyInfo.len}).`);
+  }
+  if (urlRef && keyInfo.ref && urlRef !== keyInfo.ref) {
+    console.warn(`[Sync] El ref del JWT (${keyInfo.ref}) no coincide con el de la URL (${urlRef}). La key es de otro proyecto: todos los upserts darán 401.`);
+  }
 
   if (!supabaseUrl || !supabaseKey) {
     throw new Error(
@@ -379,7 +426,13 @@ export function runSupabaseSync(forceFullSync: boolean = false): Promise<SyncRes
 const PGRST204_FALLBACKS: Record<string, (records: any[]) => any[]> = {
   Product: (records) => records.map(({ isPublicWeb, webCategory, webUnavailable, externalSku, lastSyncJobId, ...rest }) => rest),
   DiscountCode: (records) => records.map(({ discountType, discountValue, minPurchase, ...rest }) => rest),
-  StoreConfig: (records) => records.map(({ businessSector, rappiWebhookSecret, peyaEnabled, peyaChainId, peyaVendorId, peyaEnv, peyaAutoAccept, peyaConnected, peyaWebhookSecret, ...rest }) => rest),
+  // La nube base (supabase_schema.sql) no tiene las columnas de fase 2
+  // (lat/lng/deliveryZones/openingHours, ver 20260809_fase2_tienda_vende.sql)
+  // ni requireMpForDelivery (20260810_hardening_stock_mp.sql:109), ni
+  // customDomain/rappi*/peyaClient* del schema local. Si la migración de la
+  // nube está pendiente el upsert da PGRST204/42703: se reintenta sin ellas.
+  // mpAccessToken/mpPublicKey/businessSector sí están en la base y se conservan.
+  StoreConfig: (records) => records.map(({ businessSector, rappiWebhookSecret, peyaEnabled, peyaChainId, peyaVendorId, peyaEnv, peyaAutoAccept, peyaConnected, peyaWebhookSecret, lat, lng, deliveryZones, openingHours, requireMpForDelivery, customDomain, peyaClientId, peyaClientSecret, peyaOutletStatus, rappiEnabled, rappiConnected, rappiApiKey, rappiStoreId, rappiAutoAccept, rappiOutletStatus, ...rest }) => rest),
   WebOrder: (records) => records.map(({ discountBreakdown, orderCode, externalOrderId, chainId, vendorId, transportType, promisedFor, acceptedFor, riderInfo, ...rest }) => rest),
   WebOrderItem: (records) => records.map(({ externalItemId, ...rest }) => rest),
 };
@@ -424,16 +477,21 @@ export async function pushEntitiesToSupabase(
         if (!res.ok) {
           const retryText = await res.text();
           if (tolerant) {
-            failed.push({ table: tableName, status: res.status, body: retryText.slice(0, 300) });
-            console.warn(`[Sync] Upsert falló [Tabla: ${tableName}] (HTTP ${res.status}). Se omite y continúa:`, retryText.slice(0, 300));
+            failed.push({ table: tableName, status: res.status, body: retryText.slice(0, 500) });
+            console.warn(`[Sync] Upsert falló [Tabla: ${tableName}] (HTTP ${res.status}) tras fallback de columnas. Se omite y continúa:`, retryText.slice(0, 500));
             continue;
           }
           throw new Error(`Error en Supabase upsert [Tabla: ${tableName}]: [HTTP ${res.status}] ${retryText}`);
         }
       } else {
         if (tolerant) {
-          failed.push({ table: tableName, status: res.status, body: errorText.slice(0, 300) });
-          console.warn(`[Sync] Upsert falló [Tabla: ${tableName}] (HTTP ${res.status}). Se omite y continúa:`, errorText.slice(0, 300));
+          failed.push({ table: tableName, status: res.status, body: errorText.slice(0, 500) });
+          if (res.status === 401 && tableName === "StoreConfig") {
+            const role = describeSupabaseKey(supabaseKey).role || "desconocido";
+            console.warn(`[Sync] Upsert falló [Tabla: StoreConfig] (HTTP 401, key role=${role}). Causa probable: sync con anon key + REVOKE por columna (mpAccessToken/peyaWebhookSecret) o service_role de otro proyecto/rotada. Verifique supabase_service_role_key del dispositivo. Detalle:`, errorText.slice(0, 500));
+          } else {
+            console.warn(`[Sync] Upsert falló [Tabla: ${tableName}] (HTTP ${res.status}). Se omite y continúa:`, errorText.slice(0, 500));
+          }
           continue;
         }
         throw new Error(`Error en Supabase upsert [Tabla: ${tableName}]: [HTTP ${res.status}] ${errorText}`);

@@ -1030,6 +1030,12 @@ export async function pullStoreConfigFromCloud(ctx: SyncPhaseContext, firstStore
           }
         }
       }
+    } else {
+      // El PULL con anon key choca con el REVOKE por columna de mpAccessToken
+      // (SELECT * incluye la columna revocada). Solo se loguea: el PUSH es
+      // quien reporta el fallo parcial.
+      const body = await resConfig.text().catch(() => "");
+      console.warn(`[Sync] Pull StoreConfig HTTP ${resConfig.status} (tenant ${tenantId}). Se continúa con el estado local. Detalle:`, body.slice(0, 300));
     }
   } catch (err) {
     console.warn("Error al descargar StoreConfig desde Supabase:", err);

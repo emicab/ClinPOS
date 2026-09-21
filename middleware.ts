@@ -44,9 +44,15 @@ export function middleware(request: NextRequest) {
   // Webhooks de plataformas externas (Rappi y Mercado Pago): llegan con su
   // propio token (Authorization Bearer) que cada ruta valida. El webhook de
   // PedidosYa ya no vive en el POS: apunta a clinstore.
+  // OAuth de MP: connect/callback deben ser públicos (los abre el navegador
+  // externo), igual que el status (solo expone un booleano, sin secrets).
+  // disconnect NO es público: borra credenciales y va con el gate de auth
+  // desktop como PUT /api/store-config.
   const isWebhookOrMp =
     pathname.startsWith('/api/webhooks/') ||
-    pathname.startsWith('/api/mercadopago/') ||
+    pathname === '/api/mercadopago/connect' ||
+    pathname === '/api/mercadopago/callback' ||
+    (pathname === '/api/mercadopago/status' && request.method === 'GET') ||
     pathname.startsWith('/api/mp/') ||
     pathname.startsWith('/api/integrations/rappi/webhook');
 

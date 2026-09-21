@@ -13,6 +13,10 @@ function renderHtmlResponse(
   const icon = success ? '✓' : '✕';
   const color = success ? '#22c55e' : '#f43f5e';
   const bgIcon = success ? 'rgba(34, 197, 94, 0.15)' : 'rgba(244, 63, 94, 0.15)';
+  // Avisa a la ventana del POS (si sigue abierta) para que refresque el
+  // estado del botón sin F5. El frontend también revalida con focus, por si
+  // el popup se abrió en otro navegador (Tauri shell.open) sin opener.
+  const notified = success ? 'true' : 'false';
 
   const html = `<!DOCTYPE html>
 <html>
@@ -36,6 +40,11 @@ function renderHtmlResponse(
       <p>${message}</p>
       <button class="btn" onclick="window.close()">Cerrar esta Ventana</button>
     </div>
+    <script>
+      try {
+        if (window.opener) window.opener.postMessage({ type: 'mp-oauth', success: ${notified} }, '*');
+      } catch (e) {}
+    </script>
   </body>
 </html>`;
 

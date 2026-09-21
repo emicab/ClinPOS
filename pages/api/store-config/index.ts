@@ -223,8 +223,13 @@ export default async function handler(
             bannerUrl: bannerUrl || null,
             primaryColor: primaryColor || '#2563eb',
             isWebActive: Boolean(isWebActive),
-            mpAccessToken: mpAccessToken ? mpAccessToken.trim() : null,
-            mpPublicKey: mpPublicKey ? mpPublicKey.trim() : null,
+            // Los secrets nunca viajan por GET, así que un valor vacío en el
+            // form significa "conservar el almacenado" (igual que peya/rappi
+            // con keepOr). Solo un valor nuevo no vacío lo reemplaza; para
+            // borrar hay POST /api/mercadopago/disconnect explícito. Sin esto,
+            // cada Guardar posterior al OAuth borraba el token en silencio.
+            mpAccessToken: keepOr(mpAccessToken, existingConfig?.mpAccessToken ?? null),
+            mpPublicKey: keepOr(mpPublicKey, existingConfig?.mpPublicKey ?? null),
             mpFeePercent: parsedMpFeePercent,
             whatsappPhone: whatsappPhone ? whatsappPhone.trim() : null,
             minStockBuffer: parsedMinStockBuffer,

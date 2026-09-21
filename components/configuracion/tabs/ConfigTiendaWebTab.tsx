@@ -78,6 +78,22 @@ export default function ConfigTiendaWebTab() {
   });
   const [schedules, setSchedules] = useState<DaySchedule[]>(defaultSchedules);
   const [zones, setZones] = useState<DeliveryZone[]>([]);
+  // Estado real de vinculación MP: GET /api/store-config sanitiza los secrets
+  // (correcto), así que formData.mpAccessToken siempre es "" y no sirve para
+  // pintar el botón. null = aún sin cargar.
+  const [mpConnected, setMpConnected] = useState<boolean | null>(null);
+
+  const fetchMpStatus = async () => {
+    try {
+      const res = await fetch("/api/mercadopago/status");
+      if (res.ok) {
+        const json = await res.json();
+        setMpConnected(Boolean(json?.data?.connected));
+      }
+    } catch {
+      // Se conserva el último estado conocido.
+    }
+  };
   const [storeAddress, setStoreAddress] = useState("");
   const [storeLat, setStoreLat] = useState("");
   const [storeLng, setStoreLng] = useState("");
@@ -157,12 +173,39 @@ export default function ConfigTiendaWebTab() {
 
   useEffect(() => {
     fetchConfig();
+    fetchMpStatus();
     fetch("/api/config")
       .then((res) => res.json())
       .then((data) => {
         setIsMainDevice(data.is_main_device !== "false");
       })
       .catch(() => {});
+
+    // El OAuth corre en una ventana externa (Tauri shell.open / _blank): al
+    // volver hay que revalidar el estado. Tres mecanismos complementarios:
+    // postMessage del callback, foco de ventana y visibilidad del tab.
+    const onMessage = (e: MessageEvent) => {
+      if (e?.data?.type === "mp-oauth") {
+        fetchMpStatus();
+        if (e.data.success === true) {
+          toast.success("Cuenta de Mercado Pago vinculada.");
+        } else if (e.data.success === false) {
+          toast.error("No se pudo vincular Mercado Pago. Revisá el popup.");
+        }
+      }
+    };
+    const onFocus = () => fetchMpStatus();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") fetchMpStatus();
+    };
+    window.addEventListener("message", onMessage);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("message", onMessage);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, []);
 
   const handleChange = (
@@ -310,6 +353,7 @@ export default function ConfigTiendaWebTab() {
 
       toast.success("¡Configuración de ClinStore guardada con éxito!");
       fetchConfig();
+      fetchMpStatus();
     } catch (err: any) {
       toast.error(err.message || "Ocurrió un error al guardar.");
     } finally {
@@ -322,7 +366,7 @@ export default function ConfigTiendaWebTab() {
       toast.error("Guardá primero el subdominio de la tienda.");
       return;
     }
-    if (!formData.mpAccessToken) {
+    if (mpConnected === false) {
       toast.error("No hay una cuenta de Mercado Pago conectada.");
       return;
     }
@@ -335,10 +379,11 @@ export default function ConfigTiendaWebTab() {
     }
     setSaving(true);
     try {
-      const res = await fetch("/api/store-config", {
-        method: "PUT",
+      // Endpoint explícito: PUT /api/store-config conserva los secrets cuando
+      // llegan vacíos (keepOr), así que el borrado va por acá.
+      const res = await fetch("/api/mercadopago/disconnect", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: buildSaveBody({ mpAccessToken: "", mpPublicKey: "" }),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
@@ -347,6 +392,7 @@ export default function ConfigTiendaWebTab() {
         );
       }
       toast.success("Mercado Pago desconectado.");
+      setMpConnected(false);
       fetchConfig();
     } catch (err: any) {
       toast.error(err.message || "Ocurrió un error al desconectar.");
@@ -465,6 +511,7 @@ export default function ConfigTiendaWebTab() {
         onChange={handleChange}
         saving={saving}
         storeBase={storeBase}
+        mpConnected={mpConnected}
         onOpenChangeModal={() => setShowMpChangeModal(true)}
         onDisconnectMp={disconnectMp}
       />
