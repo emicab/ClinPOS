@@ -1,6 +1,6 @@
 [package]
 name = "clinpos"
-version = "1.17.5"
+version = "1.17.6"
 description = "ClinPOS By EmiDev"
 authors = ["Emiliano Cabanillas"]
 license = ""

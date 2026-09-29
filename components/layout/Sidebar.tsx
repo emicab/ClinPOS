@@ -352,6 +352,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
   }, []);
 
   // Alertas urgentes: pedidos web rechazados por stock insuficiente.
+  // Poll cada 5 min (antes 60s): cada poll pega a Supabase aunque no haya nada.
   useEffect(() => {
     const fetchWebOrderAlerts = async () => {
       try {
@@ -372,7 +373,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
       }
     };
     fetchWebOrderAlerts();
-    const interval = setInterval(fetchWebOrderAlerts, 60000);
+    const interval = setInterval(fetchWebOrderAlerts, 300000);
     return () => clearInterval(interval);
   }, []);
 

@@ -2,6 +2,14 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.17.6] - 2026-09-29
+
+### Corregido
+- **Egress/Realtime disparado (800MB→4GB, 1.4M mensajes)**: el Realtime vuelve a ser liviano — solo `WebOrder` con debounce de 5s hacia el pull de pedidos (se quitó `ProductBranchStock`, cuyos eventos por cada venta disparaban full-syncs en todos los POS).
+- **Pulls con delta incremental**: `WebOrder` (cabeceras + ítems solo de pedidos nuevos), `Product`, `ProductBranchStock` y resto de tablas solo traen filas tocadas desde el último sync; todo paginado (antes se truncaba a 1000 filas).
+- **Push afinado**: solo se suben filas de stock que difieren de la nube (no-op), ítems de traspaso acotados al delta, backoff ante fallos y pausa de 30 min ante 401/403.
+- **Poll de alertas** de pedidos web: cada 60s → cada 5 min.
+
 ## [1.17.5] - 2026-09-29
 
 ### Corregido

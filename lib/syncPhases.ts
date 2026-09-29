@@ -77,6 +77,17 @@ async function fetchAllRows(url: string, headers: Record<string, string>): Promi
   return rows;
 }
 
+// Sufijo delta para los pulls: solo filas tocadas desde el último sync.
+// En full (forzado o primer sync) devuelve "" = descarga completa.
+// Tablas SIN updatedAt en la nube (StockTransfer, StockTransferItem,
+// ComboItem, WebOrderItem) siempre van full: son chicas y no admiten delta.
+function deltaParam(ctx: SyncPhaseContext): string {
+  if (ctx.forceFullSync) return "";
+  const t = ctx.lastSync?.getTime?.();
+  if (!t || Number.isNaN(t) || t <= 0) return "";
+  return `&updatedAt=gt.${encodeURIComponent(ctx.lastSync.toISOString())}&order=updatedAt.asc`;
+}
+
 // ===== MAPPERS DE PAYLOAD (fuente única de verdad) =====
 // Todos los caminos de sync (full y puntual) suben el MISMO set de campos.
 // Cualquier columna nueva se agrega acá y se propaga a todos lados.
@@ -379,11 +390,17 @@ export async function loadLocalEntities(lastSync: Date, forceFullSync: boolean, 
     return Number.isNaN(parsed.getTime()) ? lastSync : parsed;
   };
   const recent = (entity: string) => ({ updatedAt: { gt: cursorFor(entity) } });
+  // Los ítems se acotan a los traspasos del propio delta: antes se subía TODO
+  // el histórico en cada ciclo (ingress + respuestas gigantes en cada sync).
+  const stockTransfers = await prisma.stockTransfer.findMany({ where: forceFullSync ? {} : { createdAt: { gt: cursorFor("StockTransfer") } } });
+  const stockTransferIds = stockTransfers.map((t) => t.id);
   return {
     branches: await prisma.branch.findMany({ where: recent("Branch") }),
     branchStocks: await prisma.productBranchStock.findMany({ where: recent("ProductBranchStock") }),
-    stockTransfers: await prisma.stockTransfer.findMany({ where: forceFullSync ? {} : { createdAt: { gt: cursorFor("StockTransfer") } } }),
-    stockTransferItems: await prisma.stockTransferItem.findMany(),
+    stockTransfers,
+    stockTransferItems: await prisma.stockTransferItem.findMany({
+      where: forceFullSync ? {} : { transferId: { in: stockTransferIds } },
+    }),
     // Evita volver a subir el catálogo completo en cada ciclo incremental.
     brands: await prisma.brand.findMany({ where: recent("Brand") }),
     categories: await prisma.category.findMany({ where: recent("Category") }),
@@ -703,16 +720,41 @@ export async function refreshProductPayload(
 // faltantes, y en cancelaciones/reposiciones ajusta el stock por sucursal).
 export async function pullWebOrdersFromCloud(ctx: SyncPhaseContext): Promise<void> {
   const { supabaseUrl, supabaseKey, tenantId, mainBranchId, productIdsToRecalc } = ctx;
+  const headers = {
+    "apikey": supabaseKey,
+    "Authorization": `Bearer ${supabaseKey}`
+  };
   try {
-    const urlWebOrders = `${supabaseUrl}/rest/v1/WebOrder?tenant_id=eq.${tenantId}&select=*,WebOrderItem(*)`;
-    const resWebOrders = await fetch(urlWebOrders, {
-      headers: {
-        "apikey": supabaseKey,
-        "Authorization": `Bearer ${supabaseKey}`
+    const delta = deltaParam(ctx);
+    let cloudOrders: any[];
+    if (!delta) {
+      // FULL (primer sync o forzado): join embebido + paginado.
+      const urlWebOrders = `${supabaseUrl}/rest/v1/WebOrder?tenant_id=eq.${tenantId}&select=*,WebOrderItem(*)&order=id.asc`;
+      cloudOrders = (await fetchAllRows(urlWebOrders, headers)) ?? [];
+    } else {
+      // DELTA: solo cabeceras cambiadas + ítems únicamente para pedidos nuevos
+      // (los ítems de un pedido existente son inmutables; sus cambios de estado
+      // viajan en la cabecera y no necesitan re-descargarse).
+      const changed = (await fetchAllRows(
+        `${supabaseUrl}/rest/v1/WebOrder?tenant_id=eq.${tenantId}&select=*${delta}`,
+        headers,
+      )) ?? [];
+      for (const o of changed) {
+        const exists = await prisma.webOrder.findFirst({
+          where: { webOrderNumber: o.webOrderNumber },
+          select: { id: true },
+        });
+        if (!exists) {
+          o.WebOrderItem = (await fetchAllRows(
+            `${supabaseUrl}/rest/v1/WebOrderItem?tenant_id=eq.${tenantId}&webOrderId=eq.${o.id}&select=*`,
+            headers,
+          )) ?? [];
+        } else {
+          o.WebOrderItem = [];
+        }
       }
-    });
-    if (resWebOrders.ok) {
-      const cloudOrders = await resWebOrders.json();
+      cloudOrders = changed;
+    }
 
       // Los items de pedidos externos (PeYA/Rappi) pueden apuntar a productos
       // que el pull de catálogo aún no importó (placeholders creados por
@@ -910,7 +952,6 @@ export async function pullWebOrdersFromCloud(ctx: SyncPhaseContext): Promise<voi
           }
         }
       }
-    }
 
     // WP1 "Regla de Oro": tras recibir los pedidos de la nube, marcar como
     // PENDING_REVIEW los que el stock local (SQLite) no puede cubrir. El
@@ -1073,10 +1114,12 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
   try {
     const headers = { "apikey": supabaseKey, "Authorization": `Bearer ${supabaseKey}` };
     const tenantParam = `tenant_id=eq.${encodeURIComponent(tenantId)}`;
+    // Delta incremental: en syncs normales solo viajan filas tocadas desde el
+    // último sync (ahorra ~80-90% del egress del pull). En full va "" = todo.
+    const delta = deltaParam(ctx);
 
-    const resB = await fetch(`${supabaseUrl}/rest/v1/Branch?${tenantParam}&select=*`, { headers });
-    if (resB.ok) {
-      const cloudBranches = await resB.json();
+    const cloudBranches = await fetchAllRows(`${supabaseUrl}/rest/v1/Branch?${tenantParam}&select=*${delta}`, headers);
+    if (cloudBranches) {
       for (const b of cloudBranches) {
         const branchData = {
           name: b.name, address: b.address, phone: b.phone, isMain: b.isMain,
@@ -1091,9 +1134,8 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
       }
     }
 
-    const resSeller = await fetch(`${supabaseUrl}/rest/v1/Seller?${tenantParam}&select=*`, { headers });
-    if (resSeller.ok) {
-      const cloudSellers = await resSeller.json();
+    const cloudSellers = await fetchAllRows(`${supabaseUrl}/rest/v1/Seller?${tenantParam}&select=*${delta}`, headers);
+    if (cloudSellers) {
       for (const s of cloudSellers) {
         const sellerData = {
           name: s.name,
@@ -1111,9 +1153,8 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
       }
     }
 
-    const resBr = await fetch(`${supabaseUrl}/rest/v1/Brand?${tenantParam}&select=*`, { headers });
-    if (resBr.ok) {
-      const cloudBrands = await resBr.json();
+    const cloudBrands = await fetchAllRows(`${supabaseUrl}/rest/v1/Brand?${tenantParam}&select=*${delta}`, headers);
+    if (cloudBrands) {
       for (const b of cloudBrands) {
         const brandData = {
           name: b.name, logoUrl: b.logoUrl, updatedAt: new Date(b.updatedAt)
@@ -1127,9 +1168,8 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
       }
     }
 
-    const resCat = await fetch(`${supabaseUrl}/rest/v1/Category?${tenantParam}&select=*`, { headers });
-    if (resCat.ok) {
-      const cloudCats = await resCat.json();
+    const cloudCats = await fetchAllRows(`${supabaseUrl}/rest/v1/Category?${tenantParam}&select=*${delta}`, headers);
+    if (cloudCats) {
       for (const c of cloudCats) {
         const catData = {
           name: c.name, logoUrl: c.logoUrl, updatedAt: new Date(c.updatedAt)
@@ -1143,9 +1183,8 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
       }
     }
 
-    const resSup = await fetch(`${supabaseUrl}/rest/v1/Supplier?${tenantParam}&select=*`, { headers });
-    if (resSup.ok) {
-      const cloudSuppliers = await resSup.json();
+    const cloudSuppliers = await fetchAllRows(`${supabaseUrl}/rest/v1/Supplier?${tenantParam}&select=*${delta}`, headers);
+    if (cloudSuppliers) {
       for (const s of cloudSuppliers) {
         const supplierData = {
           name: s.name, contactPerson: s.contactPerson, email: s.email, phone: s.phone,
@@ -1161,7 +1200,7 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
     }
 
     const cloudProductIdToLocalId = new Map<number, number>();
-    const cloudProducts = await fetchAllRows(`${supabaseUrl}/rest/v1/Product?${tenantParam}&select=*`, headers);
+    const cloudProducts = await fetchAllRows(`${supabaseUrl}/rest/v1/Product?${tenantParam}&select=*${delta}`, headers);
     if (cloudProducts) {
       for (const p of cloudProducts) {
         // Si el producto se marcó para borrar (outbox), no lo re-importemos
@@ -1264,7 +1303,7 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
       }
     }
 
-    const cloudPBS = await fetchAllRows(`${supabaseUrl}/rest/v1/ProductBranchStock?${tenantParam}&select=*`, headers);
+    const cloudPBS = await fetchAllRows(`${supabaseUrl}/rest/v1/ProductBranchStock?${tenantParam}&select=*${delta}`, headers);
     if (cloudPBS) {
       console.log(`[Sync] Pulled ${cloudPBS.length} ProductBranchStock records from Supabase.`);
       let skippedPbs = 0;
@@ -1321,9 +1360,8 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
     // RecipeItem (ingredientes de elaborados): "último escritor gana" por updatedAt.
     // Si la nube no tiene la tabla (migración pendiente), se omite sin romper el sync.
     try {
-      const resRI = await fetch(`${supabaseUrl}/rest/v1/RecipeItem?${tenantParam}&select=*`, { headers });
-      if (resRI.ok) {
-        const cloudRecipeItems = await resRI.json();
+      const cloudRecipeItems = await fetchAllRows(`${supabaseUrl}/rest/v1/RecipeItem?${tenantParam}&select=*${delta}`, headers);
+      if (cloudRecipeItems) {
         for (const ri of cloudRecipeItems) {
           const productExists = await prisma.product.findUnique({ where: { id: ri.productId }, select: { id: true } });
           const ingredientExists = await prisma.product.findUnique({ where: { id: ri.ingredientId }, select: { id: true } });
@@ -1358,21 +1396,23 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
         // tampoco lo es localmente. Esto evita que, cuando la nube aún no tiene
         // RecipeItem (migración recién aplicada / primera subida), un PULL borre
         // por accidente los ingredientes locales de recetas en uso.
-        const localRecipeIds = (await prisma.recipeItem.findMany({ select: { productId: true } })).map(r => r.productId);
-        const cloudRecipeProducts = new Set(cloudRecipeItems.map((r: any) => r.productId));
-        const localProducts = await prisma.product.findMany({
-          where: { id: { in: [...new Set(localRecipeIds)] } },
-          select: { id: true, isRecipe: true },
-        });
-        const localRecipeProductIds = new Set(localProducts.filter(p => p.isRecipe).map(p => p.id));
-        const staleProducts = [...new Set(localRecipeIds)].filter(
-          id => !cloudRecipeProducts.has(id) && !localRecipeProductIds.has(id),
-        );
-        if (staleProducts.length > 0) {
-          await prisma.recipeItem.deleteMany({ where: { productId: { in: staleProducts } } });
+        // Limpieza de huérfanos SOLO en full: con delta, cloudRecipeItems es
+        // parcial y la comparación borraría ingredientes válidos.
+        if (!delta) {
+          const localRecipeIds = (await prisma.recipeItem.findMany({ select: { productId: true } })).map(r => r.productId);
+          const cloudRecipeProducts = new Set(cloudRecipeItems.map((r: any) => r.productId));
+          const localProducts = await prisma.product.findMany({
+            where: { id: { in: [...new Set(localRecipeIds)] } },
+            select: { id: true, isRecipe: true },
+          });
+          const localRecipeProductIds = new Set(localProducts.filter(p => p.isRecipe).map(p => p.id));
+          const staleProducts = [...new Set(localRecipeIds)].filter(
+            id => !cloudRecipeProducts.has(id) && !localRecipeProductIds.has(id),
+          );
+          if (staleProducts.length > 0) {
+            await prisma.recipeItem.deleteMany({ where: { productId: { in: staleProducts } } });
+          }
         }
-      } else if (resRI.status !== 404 && resRI.status !== 400) {
-        console.warn(`[Sync] No se pudo descargar RecipeItem desde Supabase (${resRI.status}).`);
       }
     } catch (riErr) {
       console.warn("[Sync] Error al descargar RecipeItem desde Supabase:", riErr);
@@ -1381,9 +1421,10 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
     // Traspasos de stock: se descargan para que el destino vea los pedidos
     // SENT y el emisor vea la respuesta (COMPLETED/REJECTED/CANCELLED).
     try {
-      const resST = await fetch(`${supabaseUrl}/rest/v1/StockTransfer?${tenantParam}&select=*`, { headers });
-      if (resST.ok) {
-        const cloudTransfers = await resST.json();
+      // StockTransfer/Item no tienen updatedAt en la nube: siempre full, pero
+      // paginado (antes se truncaba a 1000 filas de PostgREST).
+      const cloudTransfers = await fetchAllRows(`${supabaseUrl}/rest/v1/StockTransfer?${tenantParam}&select=*`, headers);
+      if (cloudTransfers) {
         for (const st of cloudTransfers) {
           const branchExists = await prisma.branch.findUnique({ where: { id: st.sourceBranchId }, select: { id: true } })
             && await prisma.branch.findUnique({ where: { id: st.targetBranchId }, select: { id: true } });
@@ -1403,9 +1444,8 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
         }
       }
 
-      const resSTI = await fetch(`${supabaseUrl}/rest/v1/StockTransferItem?${tenantParam}&select=*`, { headers });
-      if (resSTI.ok) {
-        const cloudItems = await resSTI.json();
+      const cloudItems = await fetchAllRows(`${supabaseUrl}/rest/v1/StockTransferItem?${tenantParam}&select=*`, headers);
+      if (cloudItems) {
         for (const sti of cloudItems) {
           const transferExists = await prisma.stockTransfer.findUnique({ where: { id: sti.transferId }, select: { id: true } });
           if (!transferExists) continue;
@@ -1429,9 +1469,8 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
     // y para que el push posterior re-emita los datos con items/conditions embebidos
     // (lo que la tienda web lee directamente).
     try {
-      const resCombo = await fetch(`${supabaseUrl}/rest/v1/Combo?${tenantParam}&select=*`, { headers });
-      if (resCombo.ok) {
-        const cloudCombos = await resCombo.json();
+      const cloudCombos = await fetchAllRows(`${supabaseUrl}/rest/v1/Combo?${tenantParam}&select=*${delta}`, headers);
+      if (cloudCombos) {
         for (const co of cloudCombos) {
           // Si el combo se marcó para borrar (outbox), no lo re-importemos.
           const { isOutboxDeletePending } = await import("./syncOutbox");
@@ -1458,9 +1497,9 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
         }
       }
 
-      const resComboItem = await fetch(`${supabaseUrl}/rest/v1/ComboItem?${tenantParam}&select=*`, { headers });
-      if (resComboItem.ok) {
-        const cloudComboItems = await resComboItem.json();
+      // ComboItem no tiene updatedAt: siempre full pero paginado.
+      const cloudComboItems = await fetchAllRows(`${supabaseUrl}/rest/v1/ComboItem?${tenantParam}&select=*`, headers);
+      if (cloudComboItems) {
         for (const ci of cloudComboItems) {
           const comboExists = await prisma.combo.findUnique({ where: { id: ci.comboId }, select: { id: true } });
           const productExists = await prisma.product.findUnique({ where: { id: ci.productId }, select: { id: true } });
@@ -1473,9 +1512,8 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
         }
       }
 
-      const resPromo = await fetch(`${supabaseUrl}/rest/v1/Promotion?${tenantParam}&select=*`, { headers });
-      if (resPromo.ok) {
-        const cloudPromos = await resPromo.json();
+      const cloudPromos = await fetchAllRows(`${supabaseUrl}/rest/v1/Promotion?${tenantParam}&select=*${delta}`, headers);
+      if (cloudPromos) {
         for (const pr of cloudPromos) {
           // Si la promoción se marcó para borrar (outbox), no la re-importemos.
           const { isOutboxDeletePending } = await import("./syncOutbox");

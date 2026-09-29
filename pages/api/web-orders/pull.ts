@@ -8,6 +8,7 @@ import type { NextApiRequest, NextApiResponse } from 'next';
 import { isProDevice } from '../../../lib/branchIdentity';
 import { getSelectiveSyncCredentials } from '../../../lib/syncService';
 import { getMainBranchId, pullWebOrdersFromCloud, type SyncPhaseContext } from '../../../lib/syncPhases';
+import prisma from '../../../lib/prisma';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -25,12 +26,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const mainBranchId = await getMainBranchId();
     const productIdsToRecalc = new Set<number>();
 
+    // Delta incremental: usa el watermark del último sync completo para traer
+    // solo pedidos tocados (el pull realtime dispara seguido; full sería
+    // volver a descargar todo el historial en cada evento).
+    let lastSync = new Date(0);
+    try {
+      const syncSetting = await prisma.setting.findUnique({ where: { key: "supabase_last_sync" } });
+      if (syncSetting?.value) {
+        const parsed = new Date(syncSetting.value);
+        if (!Number.isNaN(parsed.getTime()) && parsed.getTime() > 0) lastSync = parsed;
+      }
+    } catch {
+      // Sin watermark: full (primer sync).
+    }
+
     const ctx: SyncPhaseContext = {
       supabaseUrl,
       supabaseKey,
       tenantId,
       forceFullSync: false,
-      lastSync: new Date(0),
+      lastSync,
       isMainDeviceFlag: true,
       mainBranchId,
       productIdsToRecalc,

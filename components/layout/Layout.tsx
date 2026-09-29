@@ -44,6 +44,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   } = useModules();
   const { online, pendingSync, pendingBreakdown } = useSyncStatus();
   const pathname = usePathname() || "";
+  // Backoff de sync: ante fallos repetidos se espacian los intentos
+  // (2^n min, tope 30) en vez de quemar egress cada 5 min en loop.
+  const syncFailCount = React.useRef(0);
+  const syncCooldownUntil = React.useRef(0);
 
   // El sync a la nube solo está activo en planes con respaldo en la nube.
   const isSyncEnabled =
@@ -53,7 +57,8 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const showPinLock =
     !isLoading && !showOnboarding && isModuleEnabled("roles") && !currentUser;
 
-  // Auto-sync periódico con Supabase (sin Realtime para reducir consumo de mensajes).
+  // Auto-sync periódico con Supabase + Realtime liviano (solo WebOrder).
+  // El backoff evita quemar egress en loops de fallo; ver efecto Realtime abajo.
   React.useEffect(() => {
     if (
       isLoading ||
@@ -66,10 +71,20 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       return;
     }
 
+    const registerSyncFailure = () => {
+      syncFailCount.current += 1;
+      const backoffMs = Math.min(Math.pow(2, syncFailCount.current) * 60000, 30 * 60000);
+      syncCooldownUntil.current = Date.now() + backoffMs;
+    };
+
     const triggerSync = async () => {
+      // Enfriamiento por fallos: no gastar egress en un loop que no avanza.
+      if (Date.now() < syncCooldownUntil.current) return;
       try {
         const res = await fetch("/api/sync");
         if (res.ok) {
+          syncFailCount.current = 0;
+          syncCooldownUntil.current = 0;
           window.dispatchEvent(new Event("sync-completed"));
           // Cron distribuido de expiración de pedidos web: reusa el ciclo de
           // 5 min del sync. Fire-and-forget, no bloquea ni rompe el sync.
@@ -78,8 +93,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
           }).catch((err) => {
             console.error("Error al disparar la expiración de pedidos web:", err);
           });
+        } else {
+          registerSyncFailure();
         }
       } catch (err) {
+        registerSyncFailure();
         console.error(
           "Error al sincronizar automáticamente con Supabase:",
           err,
@@ -102,8 +120,11 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     };
   }, [isLoading, hasSupabaseConfig, showOnboarding, showPinLock, storageMode, plan]);
 
-  // Realtime selectivo: stock y pedidos disparan un pull liviano inmediato;
-  // el ciclo periódico sigue siendo el respaldo ante eventos perdidos.
+  // Realtime liviano: SOLO WebOrder dispara un pull de pedidos (no un sync
+  // full). ProductBranchStock se excluyó a propósito: cada venta escribe
+  // stock en la nube y esos eventos rebotaban a todos los POS disparando
+  // full-syncs (origen del salto 800MB→4GB / 1.4M mensajes). El ciclo
+  // periódico sigue siendo el respaldo ante eventos perdidos.
   React.useEffect(() => {
     if (isLoading || plan !== "pro" || !hasSupabaseConfig || showOnboarding || showPinLock || storageMode === "local") return;
     let channel: ReturnType<ReturnType<typeof createClient>["channel"]> | null = null;
@@ -114,12 +135,12 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       if (refreshTimer) clearTimeout(refreshTimer);
       refreshTimer = setTimeout(async () => {
         try {
-          const response = await fetch("/api/sync");
+          const response = await fetch("/api/web-orders/pull");
           if (response.ok) window.dispatchEvent(new Event("sync-completed"));
         } catch (error) {
           console.warn("[Realtime] No se pudo actualizar el estado local:", error);
         }
-      }, 800);
+      }, 5000);
     };
 
     (async () => {
@@ -130,7 +151,6 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
         const client = createClient(config.supabaseUrl, config.supabaseAnonKey, { auth: { persistSession: false } });
         channel = client
           .channel(`clinpos-${config.tenantId}`)
-          .on("postgres_changes", { event: "*", schema: "public", table: "ProductBranchStock", filter: `tenant_id=eq.${config.tenantId}` }, refreshFromRealtime)
           .on("postgres_changes", { event: "*", schema: "public", table: "WebOrder", filter: `tenant_id=eq.${config.tenantId}` }, refreshFromRealtime)
           .subscribe();
       } catch (error) {

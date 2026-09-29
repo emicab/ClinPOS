@@ -227,6 +227,19 @@ async function runSupabaseSyncInternal(forceFullSync: boolean = false): Promise<
     const lastSyncStr = config.supabase_last_sync;
     const syncCursors = parseSyncCursors(config[SYNC_CURSORS_SETTING]);
 
+    // Enfriamiento por fallo de autenticación: si la key está rotada o es de
+    // otro proyecto, cada ciclo re-descargaba todo y reintentaba lo mismo
+    // (egress infinito). Se pausa 30 min; el sync manual forzado lo salta.
+    if (!forceFullSync && config.sync_auth_cooldown_until) {
+      const until = new Date(config.sync_auth_cooldown_until).getTime();
+      if (!Number.isNaN(until) && until > Date.now()) {
+        return {
+          success: false,
+          message: `Sincronización pausada por error de autenticación reciente. Reintenta después de ${new Date(until).toLocaleTimeString("es-AR")}.`,
+        };
+      }
+    }
+
     const isMainDeviceFlag = await isMainDevice();
 
     // La Casa Central revalida su licencia online en cada sync: si el plan bajó
@@ -298,6 +311,17 @@ async function runSupabaseSyncInternal(forceFullSync: boolean = false): Promise<
     if (failed.length > 0) {
       const failedTables = failed.map(f => `${f.table} [HTTP ${f.status}]`).join(", ");
       console.warn(`[Sync] Sincronización parcial: fallaron tablas → ${failedTables}`);
+      // 401/403 = credencial inválida/rotada: no tiene sentido reintentar cada
+      // 5 min. Se activa el enfriamiento de 30 min (ver inicio de la función).
+      if (failed.some(f => f.status === 401 || f.status === 403)) {
+        const until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+        await prisma.setting.upsert({
+          where: { key: "sync_auth_cooldown_until" },
+          update: { value: until },
+          create: { key: "sync_auth_cooldown_until", value: until },
+        });
+        console.warn(`[Sync] Cooldown de autenticación activado hasta ${until}.`);
+      }
       return {
         success: false,
         message: `Sincronización parcial: no se pudieron subir ${failed.length} tabla(s) (${failedTables}). Se reintentará en el próximo sync.`,
@@ -336,6 +360,8 @@ async function runSupabaseSyncInternal(forceFullSync: boolean = false): Promise<
       update: { value: syncTimeString },
       create: { key: "supabase_last_sync", value: syncTimeString }
     });
+    // El sync completo funcionó: levantar cualquier enfriamiento de auth previo.
+    await prisma.setting.deleteMany({ where: { key: "sync_auth_cooldown_until" } });
 
     // Cursor por dominio: queda actualizado solo cuando todo el ciclo y el
     // outbox terminaron correctamente. El watermark global se conserva para
@@ -609,6 +635,41 @@ export async function syncModifierGroupsForProducts(tenantId: string, productIds
   }
 }
 
+// Compara las filas locales de stock con la nube y devuelve payloads solo
+// para las que difieren (o no existen arriba). Ver nota en syncSingleProduct.
+async function filterChangedPbsPayloads(
+  branchStocks: any[],
+  tenantId: string,
+  supabaseUrl: string,
+  supabaseKey: string,
+): Promise<Record<string, any>[]> {
+  const toAll = () => branchStocks.map((bs) => toPbsPayload(bs, tenantId));
+  try {
+    const productId = branchStocks[0]?.productId;
+    if (productId === undefined || productId === null) return toAll();
+    const res = await fetchWithTimeout(
+      `${supabaseUrl}/rest/v1/ProductBranchStock?tenant_id=eq.${encodeURIComponent(tenantId)}&productId=eq.${productId}&select=productId,branchId,quantityStock`,
+      { headers: { "apikey": supabaseKey, "Authorization": `Bearer ${supabaseKey}` } },
+      10000,
+    );
+    if (!res.ok) return toAll();
+    const cloudRows = await res.json();
+    const cloudQty = new Map<number, number>(
+      (Array.isArray(cloudRows) ? cloudRows : []).map((c: any) => [Number(c.branchId), Number(c.quantityStock)]),
+    );
+    const changed = branchStocks.filter((bs) => {
+      const cq = cloudQty.get(Number(bs.branchId));
+      return cq === undefined || Number.isNaN(cq) || cq !== Number(bs.quantityStock);
+    });
+    if (changed.length !== branchStocks.length) {
+      console.log(`[Sync] PBS no-op: ${branchStocks.length - changed.length}/${branchStocks.length} filas ya iguales en la nube, no se suben.`);
+    }
+    return changed.map((bs) => toPbsPayload(bs, tenantId));
+  } catch {
+    return toAll();
+  }
+}
+
 export async function syncSingleProduct(productId: number): Promise<boolean> {
   if (!(await isCloudAllowed())) return false;
   try {
@@ -628,7 +689,16 @@ export async function syncSingleProduct(productId: number): Promise<boolean> {
 
     payload.Product = [toProductPayload(product, tenantId)];
 
-    payload.ProductBranchStock = (product.branchStocks || []).map(bs => toPbsPayload(bs, tenantId));
+    // No-op detection: solo se suben las filas de stock que DIFIEREN de la
+    // nube. Cada upsert a ProductBranchStock genera un evento Realtime que
+    // antes rebotaba a todos los POS (origen de los 1.4M mensajes); re-subir
+    // filas idénticas era puro gasto. Ante cualquier duda, fail-open (subir).
+    payload.ProductBranchStock = await filterChangedPbsPayloads(
+      product.branchStocks || [],
+      tenantId,
+      supabaseUrl,
+      supabaseKey,
+    );
 
     const recipeItems = await prisma.recipeItem.findMany({
       where: { productId },
