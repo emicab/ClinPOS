@@ -2,6 +2,11 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.17.5] - 2026-09-29
+
+### Corregido
+- **Combos en Nueva Venta**: los combos vuelven a aparecer como pills (se pedía el formato admin `?all=true` en vez del formato web que los filtraba) y ahora también se pueden buscar escribiendo su nombre en el mismo buscador de productos, con badge COMBO y soporte de Enter.
+
 ## [1.17.3] - 2026-09-17
 
 ### Corregido

@@ -25,6 +25,7 @@ const SaleForm = () => {
     searchedClients,
     productSearchTerm,
     searchedProducts,
+    searchedCombos,
     recentProducts,
     categoryProducts,
     isLoadingCategoryProducts,
@@ -137,10 +138,12 @@ const SaleForm = () => {
           <SaleInputSection
             productSearchTerm={productSearchTerm}
             searchedProducts={searchedProducts}
+            searchedCombos={searchedCombos}
             productInputRef={productInputRef}
             handleProductSearchChange={handleProductSearchChange}
             handleProductKeyDown={handleProductKeyDown}
             handleSelectProduct={handleSelectProduct}
+            handleSelectCombo={handleSelectCombo}
           />
 
           {/* Listado de Combos y Recientes (Opcional, en base a módulos) */}

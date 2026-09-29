@@ -176,7 +176,7 @@ export const useSaleState = () => {
               .then((r) => (r.ok ? r.json() : {}))
               .catch(() => ({})) as Promise<any>,
             showCombos
-              ? fetch("/api/combos")
+              ? fetch("/api/combos?all=true")
                   .then((r) => (r.ok ? r.json() : []))
                   .catch(() => [])
               : Promise.resolve([]),
@@ -220,17 +220,62 @@ export const useSaleState = () => {
         }
 
         if (showCombos) {
+          // El endpoint sin ?all=true devuelve el formato "venta/web"
+          // (priceSale string, items planos sin `product` ni `active`), que es
+          // incompatible con handleSelectCombo. Pedimos ?all=true (formato
+          // admin) y normalizamos de forma tolerante por si algún día vuelve
+          // el formato venta.
+          const comboList = Array.isArray(combosData) ? combosData : [];
           setCombos(
-            combosData
-              .filter((c: any) => c.active)
-              .map((c: any) => ({
-                ...c,
-                price: parseFloat(c.price),
-                items: c.items.map((i: any) => ({
-                  ...i,
-                  customPrice: i.customPrice ? parseFloat(i.customPrice) : null,
-                })),
-              })),
+            comboList
+              .filter((c: any) => c.active !== false)
+              .map((c: any) => {
+                const items = Array.isArray(c.items) ? c.items : [];
+                return {
+                  ...c,
+                  price:
+                    c.price !== undefined && c.price !== null
+                      ? parseFloat(String(c.price).replace(",", "."))
+                      : c.priceSale !== undefined && c.priceSale !== null
+                        ? parseFloat(String(c.priceSale).replace(",", "."))
+                        : 0,
+                  items: items.map((i: any) => ({
+                    ...i,
+                    customPrice:
+                      i.customPrice !== undefined &&
+                      i.customPrice !== null &&
+                      i.customPrice !== ""
+                        ? parseFloat(String(i.customPrice).replace(",", "."))
+                        : null,
+                    // Compat: formato venta trae productName/priceSale planos
+                    product: i.product
+                      ? {
+                          ...i.product,
+                          priceSale:
+                            i.product.priceSale !== undefined &&
+                            i.product.priceSale !== null
+                              ? parseFloat(
+                                  String(i.product.priceSale).replace(",", "."),
+                                )
+                              : 0,
+                        }
+                      : i.productName
+                        ? {
+                            id: i.productId,
+                            name: i.productName,
+                            priceSale:
+                              i.priceSale !== undefined && i.priceSale !== null
+                                ? parseFloat(
+                                    String(i.priceSale).replace(",", "."),
+                                  )
+                                : 0,
+                            unitType: i.unitType || "UNIT",
+                            quantityStock: 999,
+                          }
+                        : i.product,
+                  })),
+                };
+              }),
           );
 
           setPromotions(
@@ -378,6 +423,23 @@ export const useSaleState = () => {
     }, 300);
     return () => clearTimeout(timer);
   }, [productSearchTerm, formData.items, activeBranchIdStr, getLocalStock]);
+
+  // Combos que coinciden con el término del buscador (unifica productos+combos
+  // en el mismo input; los combos no existen en /api/products).
+  const searchedCombos = useMemo(() => {
+    const term = productSearchTerm.trim().toLocaleLowerCase();
+    if (!term || combos.length === 0) return [];
+    const normalize = (s: string) =>
+      s
+        .toLocaleLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+    const normTerm = normalize(term);
+    return combos
+      .filter((c) => (c as any).active !== false)
+      .filter((c) => normalize(c.name || "").includes(normTerm))
+      .slice(0, 3);
+  }, [productSearchTerm, combos]);
 
   useEffect(() => {
     const code = formData.discountCode.trim().toUpperCase();
@@ -555,6 +617,12 @@ export const useSaleState = () => {
     barcodeInput.current = "";
 
     const normalizedTerm = term.toLocaleLowerCase();
+    const normalizeCombo = (s: string) =>
+      s
+        .toLocaleLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+    const normTerm = normalizeCombo(term);
     const exactVisible = searchedProducts.find(
       (product) => product.sku?.trim().toLocaleLowerCase() === normalizedTerm,
     );
@@ -562,6 +630,20 @@ export const useSaleState = () => {
 
     if (visibleProduct) {
       handleSelectProduct(visibleProduct);
+      return;
+    }
+
+    // Sin producto visible: buscar combo por nombre (exacto o único).
+    // Esto permite agregar un combo escribiendo su nombre + Enter.
+    const matchingCombos = combos
+      .filter((c) => (c as any).active !== false)
+      .filter((c) => normalizeCombo(c.name || "").includes(normTerm));
+    const exactCombo = matchingCombos.find(
+      (c) => normalizeCombo(c.name || "") === normTerm,
+    );
+    const visibleCombo = exactCombo || (matchingCombos.length === 1 ? matchingCombos[0] : null);
+    if (visibleCombo) {
+      handleSelectCombo(visibleCombo);
       return;
     }
 
@@ -584,8 +666,10 @@ export const useSaleState = () => {
             // PISAMOS quantityStock con el valor local
             quantityStock: getLocalStock(product),
           });
+        } else if (products.length === 0 && !visibleCombo && matchingCombos.length === 0) {
+          toast.error(`No se encontró un producto o combo para "${term}".`);
         } else if (products.length === 0) {
-          toast.error(`No se encontró un producto para "${term}".`);
+          toast.error("Hay varios combos. Elegí uno de la lista.");
         } else {
           toast.error("Hay varios productos. Elegí uno de la lista.");
         }
@@ -797,27 +881,38 @@ export const useSaleState = () => {
       return;
     }
     const batchId = Date.now();
-    const newItems: SaleItemInCart[] = combo.items.map((item) => ({
-      productId: String(item.productId),
-      productName: `${item.product?.name || `#${item.productId}`} (Combo: ${combo.name})`,
-      // PISAMOS availableStock del combo con el valor local
-      availableStock: item.product ? getLocalStock(item.product) : 999,
-      quantity: item.quantity,
-      priceAtSale: item.customPrice ?? item.product?.priceSale ?? 0,
-      unitType: item.product?.unitType || "UNIT",
-      tempId: batchId + item.productId,
-      subtotal:
-        (item.customPrice ?? item.product?.priceSale ?? 0) * item.quantity,
-      comboBatchId: batchId,
-    }));
+    const toNumber = (v: unknown, fallback = 0) => {
+      if (v === null || v === undefined || v === "") return fallback;
+      const n = typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
+      return Number.isNaN(n) ? fallback : n;
+    };
+    const comboPrice = toNumber((combo as any).price ?? (combo as any).priceSale, 0);
+    const newItems: SaleItemInCart[] = combo.items.map((item) => {
+      const unitPrice = toNumber(
+        item.customPrice ?? item.product?.priceSale,
+        0,
+      );
+      return {
+        productId: String(item.productId),
+        productName: `${item.product?.name || `#${item.productId}`} (Combo: ${combo.name})`,
+        // PISAMOS availableStock del combo con el valor local
+        availableStock: item.product ? getLocalStock(item.product) : 999,
+        quantity: item.quantity,
+        priceAtSale: unitPrice,
+        unitType: item.product?.unitType || "UNIT",
+        tempId: batchId + item.productId,
+        subtotal: unitPrice * item.quantity,
+        comboBatchId: batchId,
+      };
+    });
     const fullSum = newItems.reduce((sum, item) => sum + item.subtotal, 0);
-    const discount = Math.max(0, fullSum - combo.price);
+    const discount = Math.max(0, fullSum - comboPrice);
     setFormData((prev) => ({ ...prev, items: [...prev.items, ...newItems] }));
     setComboDiscounts((prev) => ({ ...prev, [batchId]: discount }));
     setProductSearchTerm("");
     setSearchedProducts([]);
     toast.success(
-      `Combo "${combo.name}" agregado ($${combo.price}, ahorro $${discount}).`,
+      `Combo "${combo.name}" agregado ($${comboPrice}, ahorro $${discount}).`,
     );
     setTimeout(() => productInputRef.current?.focus(), 50);
   };
@@ -1000,6 +1095,7 @@ export const useSaleState = () => {
     productSearchTerm,
     setProductSearchTerm,
     searchedProducts,
+    searchedCombos,
     recentProducts,
     categoryProducts,
     isLoadingCategoryProducts,
