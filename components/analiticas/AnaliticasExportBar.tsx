@@ -85,7 +85,7 @@ export default function AnaliticasExportBar() {
 
     setLoading(true);
     try {
-      const params = new URLSearchParams({ sort: "asc" });
+      const params = new URLSearchParams({ sort: "asc", status: "COMPLETED" });
       if (range.from) params.set("from", range.from);
       if (range.to) params.set("to", range.to);
 

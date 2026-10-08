@@ -39,6 +39,21 @@ export async function getArcaConfig(): Promise<ArcaConfig> {
 }
 
 /**
+ * Versiones anteriores dejaban el certificado y la clave privada ya descifrados
+ * en <cwd>/scratch/.certs. Se eliminan si existen.
+ */
+function removeLegacyPlaintextCerts() {
+  try {
+    const certsDir = path.join(process.cwd(), 'scratch', '.certs');
+    if (fs.existsSync(certsDir)) {
+      fs.rmSync(certsDir, { recursive: true, force: true });
+    }
+  } catch {
+    // best-effort
+  }
+}
+
+/**
  * Inicializa e instancia el SDK de AFIP/ARCA
  */
 export async function getAfipInstance(config: ArcaConfig) {
@@ -51,25 +66,13 @@ export async function getAfipInstance(config: ArcaConfig) {
     production: config.env === 'produccion',
   };
 
-  // Si tiene certificados configurados, los guardamos en archivos temporales
-  // ya que afip.js requiere rutas de archivos para cargarlos.
+  // @afipsdk/afip.js recibe el certificado y la clave como texto PEM (no como
+  // rutas). Antes se escribian descifrados en scratch/.certs y quedaban en disco
+  // para siempre: ahora solo viven en memoria.
   if (config.cert && config.key) {
-    const certsDir = path.join(process.cwd(), 'scratch', '.certs');
-    if (!fs.existsSync(certsDir)) {
-      fs.mkdirSync(certsDir, { recursive: true });
-    }
-
-    const certPath = path.join(certsDir, `arca_${config.cuit}.crt`);
-    const keyPath = path.join(certsDir, `arca_${config.cuit}.key`);
-
-    const rawCert = decryptText(config.cert).trim();
-    const rawKey = decryptText(config.key).trim();
-
-    fs.writeFileSync(certPath, rawCert);
-    fs.writeFileSync(keyPath, rawKey);
-
-    options.cert = certPath;
-    options.key = keyPath;
+    options.cert = decryptText(config.cert).trim();
+    options.key = decryptText(config.key).trim();
+    removeLegacyPlaintextCerts();
   } else if (config.env === 'produccion') {
     throw new Error('Certificados de producción no provistos.');
   }
@@ -144,9 +147,11 @@ export async function createElectronicInvoice(
 
   const afip = await getAfipInstance(config);
 
-  const docType = customClientCuit 
-    ? getAfipDocType(customClientCuit) 
-    : (sale.client?.phone || sale.client?.email ? 96 : 99); // Fallback DNI o S/I
+  // Sin documento informado: Consumidor Final (99, nro 0). Antes se enviaba DNI (96)
+  // con numero 0 si el cliente tenia telefono o email, y ARCA lo rechaza.
+  const docType = customClientCuit
+    ? getAfipDocType(customClientCuit)
+    : 99;
 
   const docNumber = customClientCuit 
     ? parseInt(customClientCuit.replace(/\D/g, ''), 10) 
@@ -159,7 +164,8 @@ export async function createElectronicInvoice(
   const lastVoucher = await afip.ElectronicBilling.getLastVoucher(ptoVta, cbteTipo);
   const nextNumber = lastVoucher + 1;
 
-  const totalAmount = Number(sale.totalAmount);
+  // Importes en pesos con 2 decimales exactos (ARCA exige neto + IVA = total).
+  const totalAmount = Math.round(Number(sale.totalAmount) * 100) / 100;
   
   // Para simplificar, consideramos servicios / bienes según corresponda. Concepto: 1 (Bienes)
   const concepto = 1; 
@@ -182,11 +188,9 @@ export async function createElectronicInvoice(
     // Supongamos tasa del 21% para todo como base (se puede parametrizar)
     // ImpNeto + ImpIVA = totalAmount
     // ImpNeto * 1.21 = totalAmount
-    const neto = totalAmount / 1.21;
-    const iva = totalAmount - neto;
-
-    ImpNeto = Math.round(neto * 100) / 100;
-    ImpIVA = Math.round(iva * 100) / 100;
+    ImpNeto = Math.round((totalAmount / 1.21) * 100) / 100;
+    // El IVA se obtiene por diferencia para que ImpNeto + ImpIVA == ImpTotal siempre.
+    ImpIVA = Math.round((totalAmount - ImpNeto) * 100) / 100;
 
     ivaArray = [
       {

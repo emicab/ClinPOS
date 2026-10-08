@@ -17,14 +17,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     cashOpen: { expected: number } | null;
   } = { salesToday: null, ticketAvg: null, lowStock: null, cashOpen: null };
 
-  // Ventas de hoy (sin canceladas).
+  // Ventas de hoy (solo completadas: sin pendientes ni canceladas).
   try {
     const start = new Date();
     start.setHours(0, 0, 0, 0);
     const end = new Date(start);
     end.setDate(end.getDate() + 1);
     const agg = await prisma.sale.aggregate({
-      where: { saleDate: { gte: start, lt: end }, status: { not: 'CANCELLED' } },
+      where: { saleDate: { gte: start, lt: end }, status: 'COMPLETED' }, // los pedidos PENDING aun no se cobraron
       _count: { id: true },
       _sum: { totalAmount: true },
     });
@@ -47,17 +47,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // ignore
   }
 
-  // Caja abierta: esperado = inicial + movimientos.
+  // Caja abierta: esperado en efectivo = inicial + movimientos en efectivo.
   try {
     const open = await prisma.cashRegister.findFirst({
       where: { status: 'OPEN' },
-      include: { movements: { select: { amount: true } } },
+      include: { movements: { select: { amount: true, paymentType: true } } },
     });
     if (open) {
-      const moves = (open.movements || []).reduce(
-        (s: number, m: any) => s + Number(m.amount || 0),
-        0,
-      );
+      // Efectivo fisico (igual que el cierre de caja): tarjeta, transferencia,
+      // QR y Mercado Pago no pasan por el cajon.
+      const moves = (open.movements || [])
+        .filter((m: any) => m.paymentType === 'CASH')
+        .reduce((s: number, m: any) => s + Number(m.amount || 0), 0);
       out.cashOpen = {
         expected: Math.round((Number(open.initialBalance || 0) + moves) * 100) / 100,
       };

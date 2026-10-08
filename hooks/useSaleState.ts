@@ -324,7 +324,7 @@ export const useSaleState = () => {
       .catch(() => {})
       .finally(() => setIsLoadingCategoryProducts(false));
 
-    fetch(`/api/ventas/recent-products${activeBranchIdStr ? `&branchId=${activeBranchIdStr}` : ''}`)
+    fetch(`/api/ventas/recent-products${activeBranchIdStr ? `?branchId=${activeBranchIdStr}` : ''}`)
       .then((res) => (res.ok ? res.json() : []))
       .then((data) => {
         if (Array.isArray(data)) {

@@ -57,7 +57,7 @@ export function evaluatePromotions(
 
     if (promo.type === 'BUY_X_GET_Y') {
       for (const cond of promo.conditions) {
-        if (!cond.productId) continue;
+        if (!cond.productId || !(cond.minQuantity > 0)) continue; // minQuantity 0 daba division por cero
         const pid = String(cond.productId);
         const qtyInCart = itemCountByProductId[pid] || 0;
         if (qtyInCart >= cond.minQuantity) {
@@ -98,6 +98,9 @@ export function evaluatePromotions(
         }
       }
     }
+
+    // Nunca descontar mas que lo que se paga ni dejar decimales flotantes.
+    discount = Math.round(Math.min(discount, subtotal) * 100) / 100;
 
     if (qualifies && discount > 0 && (!bestPromo || discount > bestPromo.discountAmount)) {
       const label = promo.discountType === 'PERCENTAGE' ? `${promo.discountValue}%` : `$${promo.discountValue}`;

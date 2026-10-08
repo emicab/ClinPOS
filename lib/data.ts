@@ -110,6 +110,7 @@ export async function getTotalRevenueThisMonth(): Promise<number> {
 
         const sales = await prisma.sale.findMany({
             where: {
+                status: 'COMPLETED', // solo ventas cobradas (sin pendientes ni canceladas)
                 saleDate: {
                     gte: startOfMonth,
                     lte: endOfMonth,
@@ -151,6 +152,7 @@ export async function getSalesForLastXDays(
 
         const sales = await prisma.sale.findMany({
             where: {
+                status: 'COMPLETED', // solo ventas cobradas (sin pendientes ni canceladas)
                 saleDate: {
                     gte: startDate,
                     lte: today,
@@ -222,6 +224,7 @@ export async function getRevenueDataForCurrentAndPreviousMonth(): Promise<Monthl
 
         const currentMonthSales = await prisma.sale.findMany({
             where: {
+                status: 'COMPLETED', // solo ventas cobradas (sin pendientes ni canceladas)
                 saleDate: { gte: startOfCurrentMonth, lte: endOfCurrentMonth },
             },
             select: { totalAmount: true },
@@ -234,6 +237,7 @@ export async function getRevenueDataForCurrentAndPreviousMonth(): Promise<Monthl
 
         const previousMonthSales = await prisma.sale.findMany({
             where: {
+                status: 'COMPLETED', // solo ventas cobradas (sin pendientes ni canceladas)
                 saleDate: {
                     gte: startOfPreviousMonth,
                     lte: endOfPreviousMonth,
@@ -297,6 +301,7 @@ export async function getTopSellingProducts(
             },
             where: {
                 sale: {
+                    status: 'COMPLETED',
                     saleDate: {
                         gte: startDate,
                         lte: endDate,
@@ -373,6 +378,7 @@ export async function getFinancialSummary(period?: {
                 totalAmount: true,
             },
             where: {
+                status: 'COMPLETED', // solo ventas cobradas (sin pendientes ni canceladas)
                 saleDate: {
                     gte: startDate,
                     lte: endDate,
@@ -386,6 +392,7 @@ export async function getFinancialSummary(period?: {
         const cogsPromise = prisma.saleItem.findMany({
             where: {
                 sale: {
+                    status: 'COMPLETED',
                     saleDate: {
                         gte: startDate,
                         lte: endDate,
@@ -474,11 +481,11 @@ export async function getMonthlyFinancialSummaries(numberOfMonths: number = 6): 
     // Ejecutamos consultas agregadas generales en paralelo (3 consultas en total)
     const [sales, saleItems, expenses] = await Promise.all([
       prisma.sale.findMany({
-        where: { saleDate: { gte: startDateBound, lte: endDateBound } },
+        where: { status: 'COMPLETED', saleDate: { gte: startDateBound, lte: endDateBound } },
         select: { saleDate: true, totalAmount: true }
       }),
       prisma.saleItem.findMany({
-        where: { sale: { saleDate: { gte: startDateBound, lte: endDateBound } } },
+        where: { sale: { status: 'COMPLETED', saleDate: { gte: startDateBound, lte: endDateBound } } },
         select: { quantity: true, purchasePriceAtSale: true, sale: { select: { saleDate: true } } }
       }),
       prisma.expense.findMany({
@@ -559,6 +566,7 @@ export async function getDailySalesCountForCurrentWeek(): Promise<DailySalesCoun
     // Obtener las ventas de la semana
     const sales = await prisma.sale.findMany({
       where: {
+        status: 'COMPLETED', // solo ventas cobradas (sin pendientes ni canceladas)
         saleDate: {
           gte: startOfWeek,
           lte: endOfWeek,
@@ -612,6 +620,7 @@ export async function getPaymentTypeDistribution(): Promise<PaymentTypeDistribut
 
     const sales = await prisma.sale.findMany({
       where: {
+        status: 'COMPLETED', // solo ventas cobradas (sin pendientes ni canceladas)
         saleDate: { gte: startOfMonth, lte: endOfMonth },
       },
       select: { paymentType: true, totalAmount: true },

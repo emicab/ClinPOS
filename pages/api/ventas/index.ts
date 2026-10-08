@@ -51,7 +51,7 @@ export default async function handler(
   res: NextApiResponse
 ) {
   if (req.method === 'GET') {
-    const { clientId, sellerId, from, to, sort } = req.query; 
+    const { clientId, sellerId, from, to, sort, status } = req.query; 
 
     const whereClause: Prisma.SaleWhereInput = {}; 
 
@@ -71,6 +71,11 @@ export default async function handler(
       } else {
         return res.status(400).json({ message: 'sellerId inválido.' });
       }
+    }
+
+    // Filtro opcional por estado (reportes/analiticas piden solo COMPLETED).
+    if (typeof status === 'string' && ['COMPLETED', 'PENDING', 'CANCELLED'].includes(status)) {
+      whereClause.status = status as Prisma.SaleWhereInput['status'];
     }
 
     const dateFilter: Prisma.DateTimeFilter = {};

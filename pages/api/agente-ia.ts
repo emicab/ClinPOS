@@ -815,6 +815,18 @@ Si consideras útil sugerirle al usuario siguientes pasos o preguntas de seguimi
                throw new Error("Violación de Seguridad: Solo se permiten consultas SELECT.");
             }
 
+            // Defensa adicional: el regex de FROM/JOIN de abajo se esquivaba con
+            // identificadores entre comillas ("Setting"), corchetes/backticks o
+            // joins por coma. Se rechazan esas formas y las tablas/columnas sensibles
+            // en cualquier parte de la consulta (claves, PIN, tokens, sync, chat).
+            if (/["`\[\]]/.test(consulta_sql) || /;\s*\S/.test(consulta_sql)) {
+               throw new Error("Violación de Seguridad: no se permiten identificadores entre comillas ni múltiples sentencias.");
+            }
+            const SENSIBLES = /\b(setting|user|storeconfig|pairingcode|syncoutbox|synctombstone|syncconflict|chatsession|chatmessage|savednote|pinhash|mpaccesstoken|geminiapikey|pragma|attach|load_extension|readfile|writefile|sqlite_[a-z_]*)\b/i;
+            if (SENSIBLES.test(consulta_sql)) {
+               throw new Error("Violación de Privacidad: la consulta referencia datos que no están disponibles para consultas analíticas.");
+            }
+
             // Allowlist estricto de tablas para proteger Setting, User, etc.
             const TABLAS_PERMITIDAS = ['PRODUCT', 'CATEGORY', 'BRAND', 'SUPPLIER', 'SALE', 'SALEITEM', 'PURCHASE', 'PURCHASEITEM', 'CLIENT', 'SELLER', 'EXPENSE', 'CASHREGISTER', 'CASHMOVEMENT', 'CONSIGNMENT', 'CONSIGNMENTITEM', 'ACCOUNTBALANCE', 'ACCOUNTMOVEMENT', 'DISCOUNTCODE', 'PROMOTION', 'PROMOTIONCONDITION', 'COMBO', 'COMBOITEM', 'CREDITCARDPROMOTION', 'INVOICE'];
             
