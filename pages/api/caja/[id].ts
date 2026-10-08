@@ -33,8 +33,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } else if (req.method === 'PUT') {
     const { actualBalance, notes } = req.body;
 
-    if (actualBalance === undefined) {
-      return res.status(400).json({ message: 'El saldo real es obligatorio para cerrar la caja.' });
+    if (actualBalance === undefined || actualBalance === null || actualBalance === '' || !Number.isFinite(Number(actualBalance))) {
+      return res.status(400).json({ message: 'El saldo real es obligatorio y debe ser un número para cerrar la caja.' });
     }
 
     try {
@@ -46,8 +46,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (!register) return res.status(404).json({ message: 'Caja no encontrada.' });
       if (register.status !== 'OPEN') return res.status(400).json({ message: 'La caja ya está cerrada.' });
 
-      const totalMovements = register.movements.reduce((sum: number, m: any) => sum + Number(m.amount), 0);
-      const expected = Number(register.initialBalance) + totalMovements;
+      // Esperado = efectivo físico: saldo inicial + movimientos en efectivo. Tarjeta,
+      // transferencia, QR o Mercado Pago no pasan por el cajón (así lo muestra la
+      // pantalla de caja); sumarlos hacía que la diferencia nunca cerrara.
+      const cashMovements = register.movements
+        .filter((m: any) => m.paymentType === 'CASH')
+        .reduce((sum: number, m: any) => sum + Number(m.amount), 0);
+      const expected = Number(register.initialBalance) + cashMovements;
       const diff = Number(actualBalance) - expected;
 
       const updated = await prisma.cashRegister.update({

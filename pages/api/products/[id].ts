@@ -183,14 +183,21 @@ export default async function handler(
         });
         totalStockCalculated = totalStockAgg._sum.quantityStock ?? 0;
       } else if (quantityStock !== undefined && !(isRecipe === true || isRecipe === 'true')) {
-        const mainBranch = await prisma.branch.findFirst({ where: { isMain: true } });
+        // Sin sucursal explícita: la de este equipo (o la Principal). El global
+        // se recalcula como suma de sucursales para no quedar desfasado.
+        const { branchId: targetBranchId } = await resolveTargetBranch(null);
         const stockVal = parseFloat(quantityStock);
-        if (mainBranch && !isNaN(stockVal)) {
+        if (targetBranchId !== null && !isNaN(stockVal)) {
           await prisma.productBranchStock.upsert({
-            where: { productId_branchId: { productId: id, branchId: mainBranch.id } },
+            where: { productId_branchId: { productId: id, branchId: targetBranchId } },
             update: { quantityStock: stockVal },
-            create: { productId: id, branchId: mainBranch.id, quantityStock: stockVal }
+            create: { productId: id, branchId: targetBranchId, quantityStock: stockVal }
           });
+          const totalStockAgg = await prisma.productBranchStock.aggregate({
+            where: { productId: id },
+            _sum: { quantityStock: true }
+          });
+          totalStockCalculated = totalStockAgg._sum.quantityStock ?? stockVal;
         }
       }
 

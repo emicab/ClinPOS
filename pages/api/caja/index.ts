@@ -22,7 +22,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   } else if (req.method === 'POST') {
     const { notes, sellerId } = req.body;
-    const initialBalance = req.body.initialBalance !== undefined ? req.body.initialBalance : 0;
+    const initialBalance = req.body.initialBalance !== undefined && req.body.initialBalance !== '' ? Number(req.body.initialBalance) : 0;
+    if (!Number.isFinite(initialBalance) || initialBalance < 0) {
+      return res.status(400).json({ message: 'El saldo inicial debe ser un número mayor o igual a 0.' });
+    }
 
     try {
       const existing = await prisma.cashRegister.findFirst({ where: { status: 'OPEN' } });

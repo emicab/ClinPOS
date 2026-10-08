@@ -121,7 +121,7 @@ export default function CajaPage() {
   const closeDiff =
     openRegister == null || actualBalance === ''
       ? null
-      : parseFloat(actualBalance) - parseFloat(openRegister.expectedBalance || '0');
+      : parseFloat(actualBalance) - (expectedCash ?? 0);
   const notesRequired =
     closeDiff !== null && !isNaN(closeDiff) && Math.abs(closeDiff) > DIF_UMBRAL_CIERRE;
 
@@ -392,7 +392,7 @@ export default function CajaPage() {
                 </div>
                 <div className="bg-background p-3 rounded-lg">
                   <p className="text-xs text-foreground-muted">Esperado total</p>
-                  <p className="text-lg font-bold">{openRegister.expectedBalance ? formatCurrency(openRegister.expectedBalance) : '-'}</p>
+                  <p className="text-lg font-bold">{formatCurrency(parseFloat(openRegister.initialBalance || '0') + openRegister.movements.reduce((s, m) => s + parseFloat(m.amount || '0'), 0))}</p>
                 </div>
                 <div className="bg-background p-3 rounded-lg">
                   <p className="text-xs text-foreground-muted">Esperado en efectivo</p>
