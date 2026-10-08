@@ -1,4 +1,15 @@
 -- ============================================================================
+-- PROPUESTA PARCIALMENTE APLICADA (2026-10-07): lo de StoreConfig ya esta aplicado en
+-- sql/20261007_storeconfig_grants_combo_numeric.sql. El resto NO se aplico porque:
+--   * Existe la politica "PosSyncPolicy" (ALL para el rol anon) en User, Setting, Sale,
+--     SaleItem, Product, Client, CashRegister, etc.: el POS esta DISEÑADO para sincronizar
+--     con la clave anon. Cerrarla rompe el sync de todo POS que no use service_role, y
+--     hoy cualquiera con la clave anon puede leer/modificar User (pinHash) y Setting
+--     (claves cifradas). Cerrarlo exige antes migrar el sync del POS a service_role o a
+--     un JWT por comercio (decision de arquitectura).
+--   * Pasos 1-4 de abajo deben revisarse con eso en mente (el REVOKE de escritura en
+--     TODAS las tablas rompe PosSyncPolicy).
+-- ============================================================================
 -- PROPUESTA (NO EJECUTADA): cerrar el acceso publico a las tablas de Supabase
 -- Proyecto: CRM (htroigemnwqiugieodmv)
 -- ============================================================================
