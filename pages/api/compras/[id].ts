@@ -5,6 +5,7 @@ import { Prisma, PurchaseStatus, PaymentType } from '@prisma/client';
 const Decimal = Prisma.Decimal;
 import { handleApiError } from '../../../lib/apiErrorHandler';
 import { sanitizeString } from '../../../lib/sanitize';
+import { resolveTargetBranch } from '../../../lib/stockAdjust';
 
 export default async function handler(
   req: NextApiRequest,
@@ -81,6 +82,14 @@ export default async function handler(
         }
       }
 
+      // Sucursal donde se recibe/revierte la mercaderia: la indicada o la de este
+      // equipo (o la Principal). Sin esto, editar una compra recibida dejaba la
+      // fila por sucursal inflada (se revertia solo el global).
+      const requestedBranch = req.body?.branchId ? parseInt(String(req.body.branchId)) : NaN;
+      const purchaseBranchId: number | null = Number.isFinite(requestedBranch)
+        ? requestedBranch
+        : (await resolveTargetBranch(null)).branchId;
+
       const result = await prisma.$transaction(async (tx) => {
         // 1. Obtener la compra actual con sus items
         const existingPurchase = await tx.purchase.findUnique({
@@ -122,6 +131,12 @@ export default async function handler(
                 where: { id: item.productId },
                 data: { quantityStock: { decrement: revertedQty } },
               });
+              if (purchaseBranchId !== null) {
+                await tx.productBranchStock.updateMany({
+                  where: { productId: item.productId, branchId: purchaseBranchId },
+                  data: { quantityStock: { decrement: revertedQty } },
+                });
+              }
             }
           }
 
@@ -155,16 +170,12 @@ export default async function handler(
                   pricePurchase: new Decimal(item.purchasePrice),
                 },
               });
-              const { branchId } = req.body;
-              if (branchId) {
-                const bId = parseInt(branchId);
-                if (!isNaN(bId)) {
-                  await tx.productBranchStock.upsert({
-                    where: { productId_branchId: { productId: item.productId, branchId: bId } },
-                    update: { quantityStock: { increment: stockQty } },
-                    create: { productId: item.productId, branchId: bId, quantityStock: stockQty }
-                  });
-                }
+              if (purchaseBranchId !== null) {
+                await tx.productBranchStock.upsert({
+                  where: { productId_branchId: { productId: item.productId, branchId: purchaseBranchId } },
+                  update: { quantityStock: { increment: stockQty } },
+                  create: { productId: item.productId, branchId: purchaseBranchId, quantityStock: stockQty }
+                });
               }
             }
           }
@@ -173,8 +184,7 @@ export default async function handler(
 
         } else if (oldStatus !== newStatus) {
           // Sin cambio de items, solo ajustar stock por cambio de estado
-          const { branchId } = req.body;
-          const bId = branchId ? parseInt(branchId) : null;
+          const bId = purchaseBranchId;
           const existingItems = await tx.purchaseItem.findMany({ where: { purchaseId: id } });
           for (const item of existingItems) {
             if (oldStatus !== PurchaseStatus.RECEIVED && newStatus === PurchaseStatus.RECEIVED) {
@@ -355,6 +365,7 @@ export default async function handler(
   } else if (req.method === 'DELETE') {
     let deletedReceivedItems: Array<{ productId: number; quantity: number }> = [];
     try {
+      const deleteBranchId = (await resolveTargetBranch(null)).branchId;
       const result = await prisma.$transaction(async (tx) => {
         const purchaseToDelete = await tx.purchase.findUnique({
           where: { id },
@@ -384,6 +395,12 @@ export default async function handler(
               where: { id: item.productId },
               data: { quantityStock: { decrement: revertedQty } },
             });
+            if (deleteBranchId !== null) {
+              await tx.productBranchStock.updateMany({
+                where: { productId: item.productId, branchId: deleteBranchId },
+                data: { quantityStock: { decrement: revertedQty } },
+              });
+            }
           }
         }
 

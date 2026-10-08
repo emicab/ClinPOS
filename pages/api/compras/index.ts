@@ -1,6 +1,7 @@
 // pages/api/compras/index.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
+import { resolveTargetBranch } from '../../../lib/stockAdjust';
 import { Prisma, PurchaseStatus, PaymentType } from '@prisma/client';
 const Decimal = Prisma.Decimal;
 import { handleApiError } from '../../../lib/apiErrorHandler';
@@ -110,7 +111,11 @@ export default async function handler(
 
       const affectedRecipeIds: number[] = [];
       const requestedBranchId = req.body?.branchId ? parseInt(String(req.body.branchId)) : NaN;
-      const purchaseBranchId = Number.isFinite(requestedBranchId) ? requestedBranchId : null;
+      // Sin sucursal explicita: la de este equipo (o la Principal); si no, el stock
+      // por sucursal quedaba desfasado del global al recibir mercaderia.
+      const purchaseBranchId: number | null = Number.isFinite(requestedBranchId)
+        ? requestedBranchId
+        : (await resolveTargetBranch(null)).branchId;
       const result = await prisma.$transaction(async (tx) => {
         const purchaseStatus = status || PurchaseStatus.PENDING;
 
