@@ -3,7 +3,7 @@
 // cliente de transacción (tx) para garantizar atomicidad en las ventas.
 
 import { Prisma, PrismaClient } from "@prisma/client";
-import { unitScale, formatQuantity } from "./recipeUnits";
+import { formatQuantity } from "./recipeUnits";
 
 type DB = PrismaClient | Prisma.TransactionClient;
 
@@ -184,8 +184,12 @@ export async function getRecipeAvailability(
       avail = await getLeafStock(db, item.ingredientId, branchId);
     }
 
-    const scale = unitScale(item.ingredient.unitType);
-    const possible = Math.floor((avail * scale) / (item.quantity * scale));
+    // Se redondea a enteros (micro-unidades) antes de dividir: multiplicar ambos
+    // lados por la misma escala no evitaba el error de punto flotante
+    // (0.9 / 0.3 daba 2.9999... y el floor devolvia 2). Ingredientes con
+    // cantidad 0 no limitan.
+    const needed = Math.round(item.quantity * 1e6);
+    const possible = needed > 0 ? Math.floor(Math.round(avail * 1e6) / needed) : Infinity;
 
     if (possible < min) {
       min = possible;
@@ -357,10 +361,15 @@ export async function deductRecipeStock(
       );
     }
 
-    await db.product.updateMany({
+    const decremented = await db.product.updateMany({
       where: { id: leaf.productId, quantityStock: { gte: leaf.quantity } },
       data: { quantityStock: { decrement: leaf.quantity } },
     });
+    if (decremented.count === 0) {
+      throw new Error(
+        `Stock insuficiente del ingrediente "${ing.name}" para preparar "${product.name}" (el stock cambió mientras se procesaba la venta).`,
+      );
+    }
 
     if (branchId) {
       await db.productBranchStock.upsert({
