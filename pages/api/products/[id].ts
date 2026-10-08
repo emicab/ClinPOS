@@ -1,7 +1,7 @@
 // pages/api/products/[id].ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { resolveTargetBranch, setBranchStock } from '../../../lib/stockAdjust';
+import { resolveTargetBranch, setBranchStock, addBranchStock } from '../../../lib/stockAdjust';
 import { Prisma } from '@prisma/client';
 const Decimal = Prisma.Decimal;
 import { handleApiError } from '../../../lib/apiErrorHandler';
@@ -501,24 +501,48 @@ export default async function handler(
       handleApiError(res, error, `deleting product ${id}`);
     }
   } else if (req.method === 'PATCH') {
-    const { quantityStock, unitType, branchId } = req.body;
+    const { quantityStock, addStock, unitType, branchId } = req.body;
     const dataToUpdate: Prisma.ProductUpdateInput = {};
     let stockValue: number | undefined;
+    let addValue: number | undefined;
     if (quantityStock !== undefined) {
       stockValue = parseFloat(quantityStock);
       if (isNaN(stockValue) || stockValue < 0) {
         return res.status(400).json({ message: 'quantityStock inválido.' });
       }
     }
+    // addStock: suma a lo que ya hay (carga "agregar"), en vez de fijar el valor.
+    if (addStock !== undefined) {
+      if (stockValue !== undefined) {
+        return res.status(400).json({ message: 'Enviá quantityStock o addStock, no ambos.' });
+      }
+      addValue = parseFloat(addStock);
+      if (isNaN(addValue) || addValue <= 0) {
+        return res.status(400).json({ message: 'addStock inválido.' });
+      }
+    }
     if (unitType !== undefined) {
       const validUnitTypes = [null, 'UNIT', 'WEIGHT', 'VOLUME'];
       dataToUpdate.unitType = validUnitTypes.includes(unitType) ? (unitType || null) : null;
     }
-    if (stockValue === undefined && Object.keys(dataToUpdate).length === 0) {
+    if (stockValue === undefined && addValue === undefined && Object.keys(dataToUpdate).length === 0) {
       return res.status(400).json({ message: 'No hay campos para actualizar.' });
     }
     try {
       let touchedBranchStock = false;
+      if (addValue !== undefined) {
+        const requested = parseInt(String(branchId));
+        const { branchId: targetBranchId, requestedInvalid } = await resolveTargetBranch(
+          isNaN(requested) ? null : requested,
+        );
+        if (requestedInvalid) return res.status(400).json({ message: 'La sucursal indicada no existe.' });
+        if (targetBranchId !== null) {
+          await addBranchStock(prisma, id, targetBranchId, addValue);
+          touchedBranchStock = true;
+        } else {
+          dataToUpdate.quantityStock = { increment: addValue };
+        }
+      }
       if (stockValue !== undefined) {
         // El stock global es la suma de las filas por sucursal: se carga sobre la
         // sucursal pedida, la de este equipo o la Principal (ver lib/stockAdjust).

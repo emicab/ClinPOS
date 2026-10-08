@@ -61,6 +61,33 @@ export async function setBranchStock(
 }
 
 /**
+ * Suma `delta` al stock de `productId` en `branchId` de forma atómica (no pisa
+ * cargas concurrentes) y recalcula el global como suma de sucursales.
+ * Devuelve el nuevo total global.
+ */
+export async function addBranchStock(
+  db: Db,
+  productId: number,
+  branchId: number,
+  delta: number,
+): Promise<number> {
+  return db.$transaction(async (tx) => {
+    await tx.productBranchStock.upsert({
+      where: { productId_branchId: { productId, branchId } },
+      update: { quantityStock: { increment: delta } },
+      create: { productId, branchId, quantityStock: delta },
+    });
+    const agg = await tx.productBranchStock.aggregate({
+      where: { productId },
+      _sum: { quantityStock: true },
+    });
+    const total = agg._sum.quantityStock ?? 0;
+    await tx.product.update({ where: { id: productId }, data: { quantityStock: total } });
+    return total;
+  });
+}
+
+/**
  * Suma o resta `delta` al stock de un producto: global y fila de la sucursal.
  * Para flujos que mueven stock de forma relativa (consignaciones, etc.) dentro
  * de una transacción; mantiene global = suma de sucursales sin recalcular.

@@ -10,6 +10,8 @@ export default function StockPage() {
   const [product, setProduct] = useState<any | null>(null);
   const [loading, setLoading] = useState(false);
   const [newStock, setNewStock] = useState<number | ''>('');
+  // 'add' suma a lo que ya hay; 'set' fija el stock a la cantidad ingresada.
+  const [mode, setMode] = useState<'add' | 'set'>('add');
   const [saving, setSaving] = useState(false);
   const [found, setFound] = useState<boolean | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -54,7 +56,7 @@ export default function StockPage() {
           quantityStock: parseFloat(String(branchRow ? branchRow.quantityStock : p.quantityStock)) || 0,
         };
         setProduct(parsed);
-        setNewStock(parsed.quantityStock);
+        setNewStock(mode === 'add' ? '' : parsed.quantityStock);
         setFound(true);
         toast.success(`Producto encontrado: ${parsed.name}`);
       } else {
@@ -76,15 +78,29 @@ export default function StockPage() {
     }
   };
 
+  const switchMode = (m: 'add' | 'set') => {
+    if (m === mode) return;
+    setMode(m);
+    if (product) setNewStock(m === 'add' ? '' : product.quantityStock);
+  };
+
+  const allowsDecimals = product?.unitType === 'WEIGHT' || product?.unitType === 'VOLUME';
+  const qty = newStock === '' ? 0 : Number(newStock);
+  const resultingStock = mode === 'add' ? product ? product.quantityStock + qty : 0 : qty;
+
   const handleSave = async () => {
     if (!product || newStock === '' || isNaN(Number(newStock))) return;
+    if (mode === 'add' && Number(newStock) <= 0) {
+      toast.error('Ingresá una cantidad mayor a 0 para agregar.');
+      return;
+    }
     setSaving(true);
     try {
       const res = await fetch(`/api/products/${product.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          quantityStock: Number(newStock),
+          ...(mode === 'add' ? { addStock: Number(newStock) } : { quantityStock: Number(newStock) }),
           ...(activeBranchId ? { branchId: Number(activeBranchId) } : {}),
         }),
       });
@@ -92,7 +108,11 @@ export default function StockPage() {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.message || 'Error al guardar');
       }
-      toast.success(`Stock de "${product.name}" actualizado a ${newStock}`);
+      toast.success(
+        mode === 'add'
+          ? `Se agregaron ${newStock} a "${product.name}" (ahora ${resultingStock})`
+          : `Stock de "${product.name}" actualizado a ${newStock}`,
+      );
       setProduct(null);
       setBarcode('');
       setFound(null);
@@ -208,21 +228,43 @@ export default function StockPage() {
             </div>
           ) : (
             <div className="space-y-2">
-              <label className="block text-sm font-medium text-foreground">Nuevo Stock</label>
+              <div className="grid grid-cols-2 gap-1 p-1 bg-background border border-border rounded-xl">
+                {([['add', 'Agregar'], ['set', 'Actualizar']] as const).map(([m, label]) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => switchMode(m)}
+                    className={`h-11 rounded-lg text-sm font-semibold transition-colors ${
+                      mode === m ? 'bg-primary text-primary-foreground' : 'text-foreground-muted hover:bg-muted'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <label className="block text-sm font-medium text-foreground">
+                {mode === 'add' ? 'Cantidad a agregar' : 'Nuevo stock (reemplaza al actual)'}
+              </label>
               <div className="flex items-center gap-3">
                 <button
                   type="button"
                   onClick={() => setNewStock(prev => Math.max(0, (prev === '' ? 0 : prev) - 1))}
+                  aria-label="Restar uno"
                   className="w-14 h-14 bg-background border-2 border-border rounded-xl text-2xl font-bold text-foreground hover:bg-muted transition-colors flex items-center justify-center"
                 >
                   −
                 </button>
                 <input
-                  type="tel"
-                  inputMode="numeric"
-                  min="0"
+                  type="text"
+                  inputMode={allowsDecimals ? 'decimal' : 'numeric'}
+                  placeholder={mode === 'add' ? '0' : undefined}
                   value={newStock}
-                  onChange={(e) => setNewStock(e.target.value === '' ? '' : parseInt(e.target.value))}
+                  onChange={(e) => {
+                    const v = e.target.value.replace(',', '.');
+                    if (v === '') return setNewStock('');
+                    const n = allowsDecimals ? parseFloat(v) : parseInt(v);
+                    if (!isNaN(n) && n >= 0) setNewStock(n);
+                  }}
                   onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleSave(); } }}
                   autoFocus
                   className="flex-1 h-14 text-2xl text-center bg-background border-2 border-border rounded-xl px-4 outline-none focus:border-primary focus:ring-2 focus:ring-primary/20 transition-all"
@@ -235,17 +277,22 @@ export default function StockPage() {
                   +
                 </button>
               </div>
+              {mode === 'add' && (
+                <p className="text-sm text-center text-foreground-muted">
+                  {product.quantityStock} + {qty} = <span className="font-bold text-foreground">{resultingStock}</span>
+                </p>
+              )}
             </div>
           )}
 
           {!product.isRecipe && (
             <button
               onClick={handleSave}
-              disabled={saving || newStock === ''}
+              disabled={saving || newStock === '' || (mode === 'add' && Number(newStock) <= 0)}
               className="w-full h-12 bg-primary text-primary-foreground font-semibold rounded-xl flex items-center justify-center gap-2 disabled:opacity-50 hover:bg-primary/90 transition-colors"
             >
               {saving ? <Loader2 size={20} className="animate-spin" /> : <Save size={20} />}
-              {saving ? 'Guardando...' : 'Guardar Stock'}
+              {saving ? 'Guardando...' : mode === 'add' ? 'Agregar al stock' : 'Actualizar stock'}
             </button>
           )}
 
