@@ -1,0 +1,21 @@
+-- 20261008_admin_payments_plans_license_columns.sql
+-- APLICADO en Supabase (proyecto CRM) el 2026-10-08 via apply_migration
+-- "admin_payments_plans_license_columns". Solo cambios ADITIVOS.
+--
+-- Problema: el panel admin (ClinPos-admin) usa las tablas "payments" y "plans" y las columnas
+-- plan_type / client_* de "licenses", que NO existian: Pagos y Planes devolvian vacio en silencio
+-- y el webhook de Mercado Pago no tenia ninguna deduplicacion (cada reintento creaba otra licencia).
+--
+-- Cambios:
+--  1) get_license() y register_license_activation() ahora devuelven SOLO lo que el POS necesita
+--     (antes devolvian la fila completa; con las nuevas columnas habrian expuesto email, telefono
+--     y CUIT del comprador a quien conociera una clave). Mismos nombres y argumentos.
+--  2) licenses: plan_type, client_name, client_email, client_phone, client_cuit (opcionales).
+--  3) plans (id uuid, name, description, price, duration_days, features, ...) y
+--     payments (id uuid, mp_payment_id UNIQUE, amount, status, plan_id, payer_email, license_id).
+--     RLS activado y sin permisos para anon/authenticated: solo service_role.
+--
+-- Verificado: anon puede ejecutar get_license (1 fila) y NO leer payments/plans/licenses;
+-- service_role lee payments, plans y las columnas nuevas.
+-- El texto SQL exacto esta en la migracion de Supabase "admin_payments_plans_license_columns".
+-- REVERSION (las tablas nuevas estan vacias): DROP TABLE public.payments, public.plans;

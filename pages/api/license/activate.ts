@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import os from "os";
 import { setDeviceSettings } from "../../../lib/deviceSettings";
+import { isProLicenseKey } from "../../../lib/licenseStatus";
 
 const getHardwareId = () => {
   if (process.env.HARDWARE_ID) return process.env.HARDWARE_ID;
@@ -70,7 +71,7 @@ export default async function handler(
             console.error("Error al actualizar hardware_id en Supabase:", updateErr);
           }
 
-          if (cleanKey.includes("PRO") || cleanKey.startsWith("CLIN-PRO") || cleanKey.startsWith("CRM-PRO")) {
+          if (isProLicenseKey(cleanKey)) {
             targetPlan = "pro";
           } else {
             targetPlan = "basico";
@@ -86,7 +87,7 @@ export default async function handler(
 
     // Fallback de validación por formato de clave (ej. CRM-XXXX-YYYY-ZZZZ)
     if (!validatedViaSupabase) {
-      if (cleanKey.includes("PRO") || cleanKey.startsWith("CLIN-PRO") || cleanKey.startsWith("CRM-PRO")) {
+      if (isProLicenseKey(cleanKey)) {
         targetPlan = "pro";
         message = "¡Licencia PLAN PRO activada con éxito! Nube y herramientas avanzadas desbloqueadas.";
       } else if (

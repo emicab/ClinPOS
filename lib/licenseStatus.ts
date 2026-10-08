@@ -37,12 +37,17 @@ export interface LicenseStatus {
   changed: boolean;
 }
 
+// El plan lo marca el PREFIJO de la clave. Antes bastaba con que la clave contuviera "PRO": una
+// clave BASICA cuya parte aleatoria incluyera "PRO" (ej. CRM-BASICO-XPRO-1234) se activaba como Pro.
+// Se conserva la tolerancia a formatos antiguos solo si la clave no es explicitamente BASICO.
+export function isProLicenseKey(cleanKey: string): boolean {
+  if (/^(CLIN|CRM)-BASICO/.test(cleanKey)) return false;
+  if (/^(CLIN|CRM)-PRO/.test(cleanKey)) return true;
+  return cleanKey.includes("PRO");
+}
+
 function planFromKey(cleanKey: string): "pro" | "basico" {
-  if (
-    cleanKey.includes("PRO") ||
-    cleanKey.startsWith("CLIN-PRO") ||
-    cleanKey.startsWith("CRM-PRO")
-  ) {
+  if (isProLicenseKey(cleanKey)) {
     return "pro";
   }
   if (

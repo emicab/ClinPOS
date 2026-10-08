@@ -20,7 +20,7 @@ Todos los cambios notables realizados en el proyecto están detallados a continu
 - **Recetario**: el stock disponible de un elaborado se calcula sin errores de redondeo (0,3 / 0,1 daba 2) y el descuento de ingredientes falla si el stock cambió durante la venta.
 - **Facturación ARCA**: el certificado y la clave privada ya no se guardan descifrados en disco; el cliente sin documento va como Consumidor Final y el IVA cuadra siempre con el total.
 - **Promociones por umbral de total**: nunca se aplicaban (el motor descartaba toda promoción sin condiciones, y en las de umbral son opcionales); ahora funcionan y respetan los productos excluidos. El descuento nunca supera el subtotal. **Analíticas y dashboard** cuentan solo ventas cobradas (pendientes y canceladas inflaban ingresos).
-- **Licencias**: la validación y activación usan funciones de la nube (la tabla ya no es pública). Los equipos sin actualizar quedan en modo "sin conexión" y conservan su plan.
+- **Licencias**: el plan se decide por el prefijo de la clave (una clave Básica con "PRO" en la parte aleatoria se activaba como Pro). La validación y activación usan funciones de la nube (la tabla ya no es pública). Los equipos sin actualizar quedan en modo "sin conexión" y conservan su plan.
 
 ### Añadido
 - **Combos: precio por "Margen s/ costo"**: calcula el precio como costo de los productos + margen %, y muestra costo, ganancia y margen real.
