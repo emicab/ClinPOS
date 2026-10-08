@@ -105,15 +105,17 @@ export async function revalidateLicense(): Promise<LicenseStatus> {
   let rows: any[] | null = null;
   let online = true;
   try {
-    const res = await fetch(
-      `${supabaseUrl}/rest/v1/licenses?key=eq.${encodeURIComponent(cleanKey)}&select=*`,
-      {
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`,
-        },
-      }
-    );
+    // La tabla "licenses" ya no es legible con la clave publica (se podian listar todas
+    // las claves): se consulta UNA clave concreta via la funcion get_license.
+    const res = await fetch(`${supabaseUrl}/rest/v1/rpc/get_license`, {
+      method: "POST",
+      headers: {
+        apikey: supabaseKey,
+        Authorization: `Bearer ${supabaseKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ p_key: cleanKey }),
+    });
     if (!res.ok) {
       rows = null;
     } else {

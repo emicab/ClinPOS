@@ -1,0 +1,23 @@
+-- 20261007_licenses_rpc.sql
+-- APLICADO en Supabase (proyecto CRM) el 2026-10-07 via apply_migration
+-- "licenses_rpc_validation_close_public_table".
+--
+-- Cierra select_license/activate_license: con la clave anon publica se podian listar todas
+-- las claves de licencia. La tabla "licenses" deja de ser accesible para anon/authenticated
+-- (service_role y crm-admin no cambian). El POS usa:
+--   * get_license(p_key)                          -> la fila de UNA clave concreta
+--   * register_license_activation(p_key, p_hw)    -> valida (activa, no vencida, limite)
+--                                                    y registra hardware_id/activaciones
+--                                                    en el servidor (la misma maquina no
+--                                                    consume otra activacion).
+-- Efecto en POS viejos con clave anon: la lectura directa da 401 y revalidateLicense() lo
+-- trata como "sin conexion" (conserva el plan, no castiga); la activacion cae al fallback
+-- por formato de clave. Actualizar a la 1.18.0 restablece la validacion en la nube.
+--
+-- Verificado como rol anon: SELECT/UPDATE directos bloqueados; get_license(clave) devuelve
+-- 1 fila y una clave inexistente 0 filas.
+--
+-- (El texto SQL aplicado esta en la migracion de Supabase "licenses_rpc_validation_close_public_table".)
+-- REVERSION de emergencia:
+--   GRANT SELECT ON TABLE public.licenses TO anon, authenticated;
+--   GRANT UPDATE (hardware_id, activations_count, updated_at) ON TABLE public.licenses TO anon, authenticated;

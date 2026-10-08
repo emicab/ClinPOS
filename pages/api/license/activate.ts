@@ -40,11 +40,10 @@ export default async function handler(
     if (supabaseUrl && supabaseKey) {
       try {
         const supabase = createClient(supabaseUrl, supabaseKey);
-        const { data: lic, error } = await supabase
-          .from("licenses")
-          .select("*")
-          .eq("key", cleanKey)
-          .maybeSingle();
+        // La tabla "licenses" no es accesible con la clave publica: se usa la funcion
+        // get_license (una clave concreta) y register_license_activation.
+        const { data: licRows, error } = await supabase.rpc("get_license", { p_key: cleanKey });
+        const lic = Array.isArray(licRows) ? licRows[0] : null;
 
         if (error) {
           console.warn("Error al consultar licencia en Supabase:", error);
@@ -62,14 +61,10 @@ export default async function handler(
           }
 
           // Vincular hardware_id e incrementar contador de activaciones en Supabase
-          const { error: updateErr } = await supabase
-            .from("licenses")
-            .update({
-              hardware_id: activeHardwareId,
-              activations_count: (lic.activations_count || 0) + 1,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", lic.id);
+          const { error: updateErr } = await supabase.rpc("register_license_activation", {
+            p_key: cleanKey,
+            p_hardware_id: activeHardwareId,
+          });
 
           if (updateErr) {
             console.error("Error al actualizar hardware_id en Supabase:", updateErr);
