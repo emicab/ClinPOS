@@ -1,6 +1,7 @@
 // pages/api/consignaciones/[id].ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
+import { incrementStock, resolveTargetBranch } from '../../../lib/stockAdjust';
 import { handleApiError } from '../../../lib/apiErrorHandler';
 import { getPaymentTypeDisplay } from '../../../lib/displayTexts';
 import { getArcaConfig, createElectronicInvoice } from '../../../lib/arcaService';
@@ -61,6 +62,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     try {
+      const consignmentBranchId = (await resolveTargetBranch(null)).branchId;
       const result = await prisma.$transaction(async (tx) => {
         const consignment = await tx.consignment.findUnique({
           where: { id: consignmentId },
@@ -100,14 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           // 2. Reingresar productos devueltos al stock
           if (qReturned > 0) {
-            await tx.product.update({
-              where: { id: cItem.productId },
-              data: {
-                quantityStock: {
-                  increment: qReturned,
-                },
-              },
-            });
+            await incrementStock(tx, cItem.productId, qReturned, consignmentBranchId);
           }
 
           // 3. Acumular venta por lo vendido
@@ -253,6 +248,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   } else if (req.method === 'DELETE') {
     // Cancelar consignación y devolver todo a stock
     try {
+      const consignmentBranchId = (await resolveTargetBranch(null)).branchId;
       await prisma.$transaction(async (tx) => {
         const consignment = await tx.consignment.findUnique({
           where: { id: consignmentId },
@@ -271,14 +267,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         for (const item of consignment.items) {
           const pendingQty = item.quantityGiven - item.quantityReturned - item.quantitySold;
           if (pendingQty > 0) {
-            await tx.product.update({
-              where: { id: item.productId },
-              data: {
-                quantityStock: {
-                  increment: pendingQty,
-                },
-              },
-            });
+            await incrementStock(tx, item.productId, pendingQty, consignmentBranchId);
           }
         }
 

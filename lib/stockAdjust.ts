@@ -59,3 +59,27 @@ export async function setBranchStock(
     return total;
   });
 }
+
+/**
+ * Suma o resta `delta` al stock de un producto: global y fila de la sucursal.
+ * Para flujos que mueven stock de forma relativa (consignaciones, etc.) dentro
+ * de una transacción; mantiene global = suma de sucursales sin recalcular.
+ */
+export async function incrementStock(
+  tx: Pick<Db, 'product' | 'productBranchStock'>,
+  productId: number,
+  delta: number,
+  branchId: number | null,
+): Promise<void> {
+  await tx.product.update({
+    where: { id: productId },
+    data: { quantityStock: { increment: delta } },
+  });
+  if (branchId !== null) {
+    await tx.productBranchStock.upsert({
+      where: { productId_branchId: { productId, branchId } },
+      update: { quantityStock: { increment: delta } },
+      create: { productId, branchId, quantityStock: delta },
+    });
+  }
+}
