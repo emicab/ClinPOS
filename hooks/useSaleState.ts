@@ -854,15 +854,13 @@ export const useSaleState = () => {
         (item) => item.tempId !== tempIdToRemove,
       );
       if (removedItem?.comboBatchId) {
-        const batchStillPresent = remaining.some(
-          (i) => i.comboBatchId === removedItem.comboBatchId,
-        );
-        if (!batchStillPresent)
-          setComboDiscounts((prevDiscounts) => {
-            const next = { ...prevDiscounts };
-            delete next[removedItem.comboBatchId!];
-            return next;
-          });
+        // Con un componente menos el combo ya no está completo: se anula su descuento
+        // (antes quedaba el ahorro entero aplicado a un combo a medias).
+        setComboDiscounts((prevDiscounts) => {
+          const next = { ...prevDiscounts };
+          delete next[removedItem.comboBatchId!];
+          return next;
+        });
       }
       return { ...prev, items: remaining };
     });
