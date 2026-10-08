@@ -152,9 +152,13 @@ export default async function handler(
           });
         }
 
+        // El stock y la cuenta corriente solo se tocan al COMPLETAR una venta
+        // (los pedidos PENDING no descuentan nada; los CANCELLED ya se repusieron).
+        const stockWasDeducted = saleToDelete.status === 'COMPLETED';
+
         affectedProductIds = saleToDelete.items.filter(i => i.productId != null).map(i => i.productId as number);
         restoredStockItems = saleToDelete.items
-          .filter(i => i.productId != null)
+          .filter(i => stockWasDeducted && i.productId != null)
           .map(i => ({
             productId: i.productId as number,
             quantity: Number(i.quantity),
@@ -163,7 +167,10 @@ export default async function handler(
         restoredBranchId = saleToDelete.branchId ?? null;
 
         // 2. Revertir saldo de Cuenta Corriente si estuvo vinculada a un cliente
-        if (saleToDelete.clientId) {
+        // Solo las ventas EN CUENTA suman deuda: una venta en efectivo a un
+        // cliente no debe tocar su saldo.
+        const wasAccountSale = saleToDelete.onAccount || saleToDelete.paymentType === 'ON_ACCOUNT';
+        if (saleToDelete.clientId && wasAccountSale && stockWasDeducted) {
           const balanceRecord = await tx.accountBalance.findUnique({
             where: { clientId: saleToDelete.clientId },
           });
@@ -197,6 +204,7 @@ export default async function handler(
         const restoreBranchId = saleToDelete.branchId || mainBranch?.id;
 
         for (const item of saleToDelete.items) {
+          if (!stockWasDeducted) continue; // pendiente/cancelada: no hay stock que reponer
           if (item.productId == null) continue; // ítem desvinculado, sin producto para reponer
 
           // Elaborado: se repone el stock de sus ingredientes, no el del producto.

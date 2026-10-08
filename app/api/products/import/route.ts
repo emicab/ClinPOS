@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import type { Prisma } from '@prisma/client';
+import { resolveTargetBranch, setBranchStock } from '@/lib/stockAdjust';
 
 export async function POST(req: Request) {
   const normalizeName = (s: unknown) =>
@@ -70,6 +71,18 @@ export async function POST(req: Request) {
     let errorCount = 0;
     const unlinkedSuppliers: string[] = [];
     const createdSuppliers: string[] = [];
+
+    // El stock del CSV se carga en la sucursal de este equipo (o la Principal)
+    // y el global se recalcula como suma; escribir solo el global dejaba las
+    // pantallas por sucursal con el stock viejo.
+    const { branchId: importBranchId } = await resolveTargetBranch(null);
+    const stockTouchedIds = new Set<number>();
+    const applyImportedStock = async (productId: number, qty: number) => {
+      if (importBranchId !== null) {
+        await setBranchStock(prisma, productId, importBranchId, qty);
+        stockTouchedIds.add(productId);
+      }
+    };
 
     for (const productData of products) {
       try {
@@ -161,7 +174,7 @@ export async function POST(req: Request) {
                 // Ojo: Sobre-escribimos el stock con el valor del CSV.
                 // Si quisieras sumar, sería: quantityStock: { increment: ... }
                 const qs = numOrUndefined(quantityStock);
-                if (qs !== undefined) updateData.quantityStock = qs;
+                if (qs !== undefined) updateData.quantityStock = qs; // sin sucursales: queda el global
                 if ('stockMinAlert' in productData) {
                     updateData.stockMinAlert = numOrUndefined(stockMinAlert) ?? null;
                 }
@@ -175,6 +188,8 @@ export async function POST(req: Request) {
                     where: { id: existingProduct.id },
                     data: updateData,
                 });
+                if (qs !== undefined) await applyImportedStock(existingProduct.id, qs);
+                stockTouchedIds.add(existingProduct.id);
                 updateCount++;
                 continue;
             }
@@ -206,15 +221,29 @@ export async function POST(req: Request) {
             ...(supplier ? { supplier: { connect: { id: supplier.id } } } : {}),
         };
 
-        await prisma.product.create({
+        const created = await prisma.product.create({
             data: productPayload
         });
+        const createdStock = numOrUndefined(quantityStock);
+        if (createdStock !== undefined) await applyImportedStock(created.id, createdStock);
+        stockTouchedIds.add(created.id);
         successCount++;
         
       } catch (err) {
         console.error("Error importing row:", err);
         errorCount++;
       }
+    }
+
+    // Encolar para el sync (antes la importacion nunca avisaba a la nube).
+    try {
+      const { enqueueOutbox } = await import('@/lib/syncOutbox');
+      for (const pid of stockTouchedIds) {
+        await enqueueOutbox('Product', 'UPSERT', String(pid));
+        if (importBranchId !== null) await enqueueOutbox('ProductBranchStock', 'UPSERT', String(pid));
+      }
+    } catch (enqErr) {
+      console.error('[Import] Error al encolar productos:', enqErr);
     }
 
     return NextResponse.json({
