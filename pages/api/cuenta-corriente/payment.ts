@@ -21,8 +21,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ message: "Faltan campos requeridos: clientId, amount, paymentType." });
     }
 
-    if (amount <= 0) {
-      return res.status(400).json({ message: "El monto del pago debe ser mayor a cero." });
+    if (typeof amount !== "number" && typeof amount !== "string") {
+      return res.status(400).json({ message: "El monto del pago es inválido." });
+    }
+    const amountNumber = Number(amount);
+    if (!Number.isFinite(amountNumber) || amountNumber <= 0) {
+      return res.status(400).json({ message: "El monto del pago debe ser un número mayor a cero." });
     }
 
     if (!Object.values(PaymentType).includes(paymentType)) {
@@ -60,7 +64,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           where: { id: account.id },
           data: {
             balance: {
-              decrement: new Decimal(amount),
+              decrement: new Decimal(amountNumber),
             },
           },
         });
@@ -70,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           data: {
             accountBalanceId: account.id,
             type: "PAYMENT",
-            amount: new Decimal(-Math.abs(amount)), // reduce la deuda
+            amount: new Decimal(-Math.abs(amountNumber)), // reduce la deuda
             description,
           },
         });
@@ -82,7 +86,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             type: "DEPOSIT",
             paymentType,
             sourceId: accountMovement.id,
-            amount: new Decimal(amount), // ingreso positivo a caja
+            amount: new Decimal(amountNumber), // ingreso positivo a caja
             description: `Cobro Cta Cte: ${client.firstName} ${client.lastName || ""} - ${description}`,
           },
         });

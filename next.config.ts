@@ -4,14 +4,7 @@ const nextConfig = {
   allowedDevOrigins: ['127.0.0.1'],
   async headers() {
     return [
-      {
-        source: '/api/:path*',
-        headers: [
-          { key: 'Access-Control-Allow-Origin', value: '*' },
-          { key: 'Access-Control-Allow-Methods', value: 'GET, POST, PUT, DELETE, OPTIONS' },
-          { key: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization' },
-        ],
-      },
+      // CORS: lo resuelve middleware.ts (orígenes permitidos). No fijar "*" acá.
       {
         source: '/(.*)',
         headers: [

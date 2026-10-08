@@ -48,6 +48,13 @@ export default async function handler(
     }
 
     await prisma.$transaction(async (tx: any) => {
+      // Reclamar el traspaso de forma atomica: si otra peticion lo respondio entre
+      // la lectura y esta transaccion, no se acredita el stock dos veces.
+      const claimed = await tx.stockTransfer.updateMany({
+        where: { id: transferId, status: 'SENT' },
+        data: { status: 'PROCESSING' },
+      });
+      if (claimed.count === 0) throw new Error('TRANSFER_ALREADY_RESPONDED');
       for (const item of transfer.items) {
         await tx.productBranchStock.upsert({
           where: {
@@ -77,6 +84,10 @@ export default async function handler(
 
     res.status(200).json({ success: true, status: 'CANCELLED' });
   } catch (error) {
+    if (error instanceof Error && error.message === 'TRANSFER_ALREADY_RESPONDED') {
+      res.status(409).json({ message: 'Este traspaso ya fue respondido o cancelado.' });
+      return;
+    }
     handleApiError(res, error, "cancelling stock transfer");
   }
 }
