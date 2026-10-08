@@ -1234,7 +1234,15 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
         const categoryExists = p.categoryId ? await prisma.category.findUnique({ where: { id: p.categoryId } }) : null;
         const supplierExists = p.supplierId ? await prisma.supplier.findUnique({ where: { id: p.supplierId } }) : null;
 
-        if (!brandExists || !categoryExists) continue;
+        // Se saltean SOLO los placeholders externos (PeYA/Rappi creados por clinstore: sin marca ni
+        // categoria y con externalSku o "(PeYA" en el nombre). Antes se salteaba todo producto sin
+        // marca/categoria, pero ambas son opcionales: esos productos nunca se descargaban al
+        // restaurar un equipo o sumar una sucursal.
+        const isExternalPlaceholder =
+          !p.brandId && !p.categoryId && (Boolean(p.externalSku) || /\(PeYA/i.test(String(p.name || "")));
+        if (isExternalPlaceholder) continue;
+        const safeBrandId = brandExists ? p.brandId : null;
+        const safeCategoryId = categoryExists ? p.categoryId : null;
 
         const skuValue = p.sku ? String(p.sku) : null;
 
@@ -1298,7 +1306,7 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
               webUnavailable: p.webUnavailable === true,
               isRecipe: p.isRecipe === true, isIngredient: p.isIngredient === true,
               imageUrl: p.imageUrl || null,
-              brandId: p.brandId, categoryId: p.categoryId, supplierId: supplierExists ? p.supplierId : null,
+              brandId: safeBrandId, categoryId: safeCategoryId, supplierId: supplierExists ? p.supplierId : null,
               updatedAt: new Date(p.updatedAt)
             },
             create: {
@@ -1309,7 +1317,7 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
               webUnavailable: p.webUnavailable === true,
               isRecipe: p.isRecipe === true, isIngredient: p.isIngredient === true,
               imageUrl: p.imageUrl || null,
-              brandId: p.brandId, categoryId: p.categoryId, supplierId: supplierExists ? p.supplierId : null,
+              brandId: safeBrandId, categoryId: safeCategoryId, supplierId: supplierExists ? p.supplierId : null,
               updatedAt: new Date(p.updatedAt)
             }
           });
@@ -1445,11 +1453,20 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
       // StockTransfer/Item no tienen updatedAt en la nube: siempre full, pero
       // paginado (antes se truncaba a 1000 filas de PostgREST).
       const cloudTransfers = await fetchAllRows(`${supabaseUrl}/rest/v1/StockTransfer?${tenantParam}&select=*`, headers);
+      // Traspasos con estado terminal LOCAL (completado/rechazado/cancelado en este equipo y aun
+      // sin subir): la nube no debe devolverlos a SENT, porque se podria responder dos veces y
+      // acreditar el stock doble.
+      const localTerminalTransferIds = new Set<number>();
       if (cloudTransfers) {
         for (const st of cloudTransfers) {
           const branchExists = await prisma.branch.findUnique({ where: { id: st.sourceBranchId }, select: { id: true } })
             && await prisma.branch.findUnique({ where: { id: st.targetBranchId }, select: { id: true } });
           if (!branchExists) continue;
+          const localTransfer = await prisma.stockTransfer.findUnique({ where: { id: st.id }, select: { status: true } });
+          if (localTransfer && localTransfer.status !== "SENT" && st.status === "SENT") {
+            localTerminalTransferIds.add(st.id);
+            continue;
+          }
           await prisma.stockTransfer.upsert({
             where: { id: st.id },
             update: {
@@ -1468,6 +1485,7 @@ export async function pullCoreEntitiesFromCloud(ctx: SyncPhaseContext): Promise<
       const cloudItems = await fetchAllRows(`${supabaseUrl}/rest/v1/StockTransferItem?${tenantParam}&select=*`, headers);
       if (cloudItems) {
         for (const sti of cloudItems) {
+          if (localTerminalTransferIds.has(sti.transferId)) continue;
           const transferExists = await prisma.stockTransfer.findUnique({ where: { id: sti.transferId }, select: { id: true } });
           if (!transferExists) continue;
           await prisma.stockTransferItem.upsert({
