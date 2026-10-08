@@ -1,4 +1,6 @@
 -- ============================================================================
+-- SUPERADA: lo propuesto aqui quedo aplicado (StoreConfig, licencias por RPC y cierre de
+-- PosSyncPolicy: ver 20261007_*.sql y 20261008_cerrar_possyncpolicy.sql). Se conserva como historial.
 -- PROPUESTA PARCIALMENTE APLICADA (2026-10-07): lo de StoreConfig ya esta aplicado en
 -- sql/20261007_storeconfig_grants_combo_numeric.sql. El resto NO se aplico porque:
 --   * Existe la politica "PosSyncPolicy" (ALL para el rol anon) en User, Setting, Sale,

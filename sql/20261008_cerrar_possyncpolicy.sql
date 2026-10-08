@@ -1,5 +1,13 @@
 -- ============================================================================
--- PENDIENTE DE APROBAR Y EJECUTAR (NO aplicado): cerrar PosSyncPolicy en Supabase
+-- APLICADO el 2026-10-08 en Supabase (proyecto CRM) via apply_migration
+-- "close_pos_sync_policy_public_catalog_readonly", con permiso explicito del usuario.
+-- Verificado como rol anon: User, Setting, Sale, SaleItem, Client, Seller, Supplier, Brand,
+-- Expense, Cash*, Account*, Purchase*, DiscountCode, ComboItem, WebOrder, PairingCode y
+-- licenses ya NO son legibles; Product y el resto del catalogo son solo lectura
+-- (Product=8514, Combo=17, Branch=13, ProductBranchStock=11882, ...); mpAccessToken
+-- bloqueado y las columnas publicas de StoreConfig funcionan; service_role sigue leyendo
+-- todo (User=13, licenses=10).
+-- (Titulo original: cerrar PosSyncPolicy en Supabase)
 -- Proyecto CRM (htroigemnwqiugieodmv)
 -- ============================================================================
 -- Hallazgo: la politica "PosSyncPolicy" (ALL para el rol anon, USING true) existe en
