@@ -50,7 +50,10 @@ export function evaluatePromotions(
   let bestPromo: AppliedPromotion | null = null;
 
   for (const promo of promotions) {
-    if (!promo.conditions || promo.conditions.length === 0) continue;
+    // Las promociones por umbral (THRESHOLD) no necesitan condiciones: son opcionales y, si
+    // existen, listan productos EXCLUIDOS del total. Antes se descartaba toda promocion sin
+    // condiciones y las de umbral (el caso normal) nunca se aplicaban.
+    if (promo.type !== 'THRESHOLD' && (!promo.conditions || promo.conditions.length === 0)) continue;
 
     let discount = 0;
     let qualifies = false;
@@ -89,10 +92,16 @@ export function evaluatePromotions(
       }
     } else if (promo.type === 'THRESHOLD') {
       const threshold = promo.minQuantity || 0;
-      if (subtotal >= threshold) {
+      // Los productos de las condiciones se excluyen del total que cuenta para el umbral.
+      const excluded = (promo.conditions || []).reduce(
+        (sum, cond) => sum + (cond.productId ? itemSubtotalByProductId[String(cond.productId)] || 0 : 0),
+        0,
+      );
+      const eligible = Math.max(0, subtotal - excluded);
+      if (eligible >= threshold && eligible > 0) {
         qualifies = true;
         if (promo.discountType === 'PERCENTAGE') {
-          discount = subtotal * (promo.discountValue / 100);
+          discount = eligible * (promo.discountValue / 100);
         } else {
           discount = promo.discountValue;
         }

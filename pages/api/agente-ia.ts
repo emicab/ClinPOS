@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../lib/prisma';
 import { decryptText } from '../../lib/encryption';
+import { sanitizeString } from '../../lib/sanitize';
 import { GoogleGenAI } from '@google/genai';
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -557,7 +558,7 @@ Si consideras útil sugerirle al usuario siguientes pasos o preguntas de seguimi
             } else {
               const promo = await prisma.promotion.create({
                 data: {
-                  name: nombre,
+                  name: sanitizeString(String(nombre ?? '')),
                   type: "SET_DISCOUNT",
                   discountType: tipo === "PERCENTAGE" ? "PERCENTAGE" : "FIXED_AMOUNT",
                   discountValue: descuento,
@@ -577,9 +578,9 @@ Si consideras útil sugerirle al usuario siguientes pasos o preguntas de seguimi
             } else {
               const combo = await prisma.combo.create({
                 data: {
-                  name: nombre,
+                  name: sanitizeString(String(nombre ?? '')),
                   price: precio,
-                  description: descripcion || null,
+                  description: descripcion ? sanitizeString(String(descripcion)) : null,
                   active: true,
                   items: {
                     create: items.map((i: any) => ({
@@ -597,13 +598,13 @@ Si consideras útil sugerirle al usuario siguientes pasos o preguntas de seguimi
             const { nombre, apellido, telefono, email, cuit, direccion, notas } = call.arguments as any;
             const newClient = await prisma.client.create({
               data: {
-                firstName: nombre,
-                lastName: apellido || null,
-                phone: telefono || null,
-                email: email || null,
-                cuit: cuit || null,
-                address: direccion || null,
-                notes: notas || null,
+                firstName: sanitizeString(String(nombre ?? '')),
+                lastName: apellido ? sanitizeString(String(apellido)) : null,
+                phone: telefono ? sanitizeString(String(telefono)) : null,
+                email: email ? sanitizeString(String(email)) : null,
+                cuit: cuit ? sanitizeString(String(cuit)) : null,
+                address: direccion ? sanitizeString(String(direccion)) : null,
+                notes: notas ? sanitizeString(String(notas)) : null,
               }
             });
             toolResponse = { exito: true, clienteCreado: newClient };
@@ -618,7 +619,7 @@ Si consideras útil sugerirle al usuario siguientes pasos o preguntas de seguimi
 
           } else if (call.name === "crear_codigo_descuento") {
             const { codigo, descuento, usoMaximo } = call.arguments as any;
-            const codeUpper = codigo.trim().toUpperCase();
+            const codeUpper = sanitizeString(String(codigo ?? '')).trim().toUpperCase();
             const createdCode = await prisma.discountCode.create({
               data: {
                 code: codeUpper,
