@@ -493,35 +493,85 @@ export default async function handler(
       handleApiError(res, error, `deleting product ${id}`);
     }
   } else if (req.method === 'PATCH') {
-    const { quantityStock, unitType } = req.body;
+    const { quantityStock, unitType, branchId } = req.body;
     const dataToUpdate: Prisma.ProductUpdateInput = {};
+    let stockValue: number | undefined;
     if (quantityStock !== undefined) {
-      if (isNaN(parseFloat(quantityStock))) {
+      stockValue = parseFloat(quantityStock);
+      if (isNaN(stockValue) || stockValue < 0) {
         return res.status(400).json({ message: 'quantityStock inválido.' });
       }
-      dataToUpdate.quantityStock = parseFloat(quantityStock);
     }
     if (unitType !== undefined) {
       const validUnitTypes = [null, 'UNIT', 'WEIGHT', 'VOLUME'];
       dataToUpdate.unitType = validUnitTypes.includes(unitType) ? (unitType || null) : null;
     }
-    if (Object.keys(dataToUpdate).length === 0) {
+    if (stockValue === undefined && Object.keys(dataToUpdate).length === 0) {
       return res.status(400).json({ message: 'No hay campos para actualizar.' });
     }
-      try {
-        const updated = await prisma.product.update({
-          where: { id },
-          data: dataToUpdate,
-        });
-      
-        try {
-          const { enqueueOutbox } = await import("../../../lib/syncOutbox");
-          await enqueueOutbox("Product", "UPSERT", String(id));
-        } catch (enqErr) {
-          console.error("[Productos] Error al encolar PATCH:", enqErr);
+    try {
+      let touchedBranchStock = false;
+      if (stockValue !== undefined) {
+        // El stock global es la suma de las filas por sucursal. Se carga sobre
+        // la sucursal pedida, la de este equipo o la Principal, y el global se
+        // recalcula; escribir solo el global dejaba las pantallas por sucursal
+        // (venta, productos, combos) mostrando el stock viejo.
+        let targetBranchId: number | null = null;
+        const requested = parseInt(String(branchId));
+        if (!isNaN(requested)) {
+          const exists = await prisma.branch.findUnique({ where: { id: requested }, select: { id: true } });
+          if (!exists) return res.status(400).json({ message: 'La sucursal indicada no existe.' });
+          targetBranchId = exists.id;
+        } else {
+          const { getDeviceBranchId } = await import('../../../lib/branchIdentity');
+          const deviceBranch = await getDeviceBranchId();
+          if (deviceBranch) {
+            const exists = await prisma.branch.findUnique({ where: { id: deviceBranch }, select: { id: true } });
+            if (exists) targetBranchId = exists.id;
+          }
+          if (targetBranchId === null) {
+            const main = await prisma.branch.findFirst({ where: { isMain: true }, select: { id: true } });
+            targetBranchId = main?.id ?? null;
+          }
         }
-      
-        res.status(200).json(updated);
+
+        if (targetBranchId !== null) {
+          const target = targetBranchId;
+          const total = await prisma.$transaction(async (tx) => {
+            await tx.productBranchStock.upsert({
+              where: { productId_branchId: { productId: id, branchId: target } },
+              update: { quantityStock: stockValue },
+              create: { productId: id, branchId: target, quantityStock: stockValue },
+            });
+            const agg = await tx.productBranchStock.aggregate({
+              where: { productId: id },
+              _sum: { quantityStock: true },
+            });
+            return agg._sum.quantityStock ?? 0;
+          });
+          dataToUpdate.quantityStock = total;
+          touchedBranchStock = true;
+        } else {
+          dataToUpdate.quantityStock = stockValue;
+        }
+      }
+
+      const updated = await prisma.product.update({
+        where: { id },
+        data: dataToUpdate,
+      });
+
+      try {
+        const { enqueueOutbox } = await import("../../../lib/syncOutbox");
+        await enqueueOutbox("Product", "UPSERT", String(id));
+        if (touchedBranchStock) {
+          await enqueueOutbox("ProductBranchStock", "UPSERT", String(id));
+        }
+      } catch (enqErr) {
+        console.error("[Productos] Error al encolar PATCH:", enqErr);
+      }
+
+      res.status(200).json(updated);
     } catch (error: any) {
       handleApiError(res, error, `patching product ${id} stock`);
     }

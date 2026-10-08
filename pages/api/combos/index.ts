@@ -1,9 +1,12 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import prisma from "@/lib/prisma";
+import { getRecipeAvailability } from "@/lib/recipeStock";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === "GET") {
     const includeAll = req.query.all === "true" || req.query.all === "1";
+    const parsedBranch = parseInt(String(req.query.branchId));
+    const branchId = isNaN(parsedBranch) ? null : parsedBranch;
     try {
       const combos = await prisma.combo.findMany({
         where: includeAll ? {} : { active: true },
@@ -17,6 +20,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                   unitType: true,
                   quantityStock: true,
                   priceSale: true,
+                  isRecipe: true,
                 },
               },
             },
@@ -24,6 +28,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         },
         orderBy: { name: "asc" },
       });
+
+      // Stock efectivo por producto: respeta la sucursal (si se pide) y deriva
+      // el de los elaborados desde sus ingredientes. Leer solo quantityStock
+      // global dejaba en 0 a los productos elaborados y a los de otra sucursal.
+      const effectiveStock = new Map<number, number>();
+      for (const combo of combos) {
+        for (const item of combo.items) {
+          if (!item.product || effectiveStock.has(item.product.id)) continue;
+          try {
+            const av = await getRecipeAvailability(prisma, item.product.id, branchId);
+            effectiveStock.set(item.product.id, av.available);
+          } catch {
+            effectiveStock.set(item.product.id, Number(item.product.quantityStock) || 0);
+          }
+        }
+      }
 
       // Vista de administración: todos los combos (activos e inactivos) con su forma completa
       if (includeAll) {
@@ -39,6 +59,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
                 name: i.product.name,
                 unitType: i.product.unitType,
                 priceSale: i.product.priceSale.toString(),
+                // El POS valida stock con estos campos: sin ellos todo combo
+                // aparecía con stock 0. Con branchId se devuelve la fila de esa
+                // sucursal (ya efectiva) para que getLocalStock la lea.
+                quantityStock: effectiveStock.get(i.product.id) ?? 0,
+                branchStocks: branchId !== null
+                  ? [{ branchId, quantityStock: effectiveStock.get(i.product.id) ?? 0 }]
+                  : [],
               } : null,
               quantity: i.quantity,
               customPrice: i.customPrice ? i.customPrice.toString() : null,
@@ -51,7 +78,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const mappedCombos = combos.map((c) => {
         let maxComboStock = 99999;
         const items = c.items.map((i) => {
-          const prodStock = i.product ? Number(i.product.quantityStock) : 0;
+          const prodStock = i.product ? effectiveStock.get(i.product.id) ?? 0 : 0;
           const reqQty = i.quantity > 0 ? i.quantity : 1;
           const possiblePacks = Math.floor(prodStock / reqQty);
           if (possiblePacks < maxComboStock) {

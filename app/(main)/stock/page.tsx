@@ -14,6 +14,10 @@ export default function StockPage() {
   const [found, setFound] = useState<boolean | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Sucursal activa de este equipo (la misma que usa la pantalla de venta).
+  const activeBranchId =
+    typeof window !== 'undefined' ? localStorage.getItem('clinpos_active_branch_id') : null;
+
   useEffect(() => {
     inputRef.current?.focus();
   }, []);
@@ -28,7 +32,9 @@ export default function StockPage() {
     setNewStock('');
 
     try {
-      const res = await fetch(`/api/products?kind=all&search=${encodeURIComponent(trimmed)}`);
+      const res = await fetch(
+        `/api/products?kind=all&search=${encodeURIComponent(trimmed)}${activeBranchId ? `&branchId=${activeBranchId}` : ''}`,
+      );
       if (!res.ok) throw new Error('Error al buscar');
 
       const data = await res.json();
@@ -36,11 +42,16 @@ export default function StockPage() {
       const p = items.find((x: any) => x.sku === trimmed) || items[0];
 
       if (p) {
+        // Stock de la sucursal activa (si existe); si no, el global.
+        const branchRow = activeBranchId && Array.isArray(p.branchStocks)
+          ? p.branchStocks.find((b: any) => String(b.branchId) === String(activeBranchId))
+          : null;
         const parsed = {
           ...p,
           priceSale: parseFloat(p.priceSale),
           pricePurchase: p.pricePurchase ? parseFloat(p.pricePurchase) : null,
-          quantityStock: parseInt(p.quantityStock),
+          // parseFloat: productos por kg/litro tienen decimales (parseInt los truncaba).
+          quantityStock: parseFloat(String(branchRow ? branchRow.quantityStock : p.quantityStock)) || 0,
         };
         setProduct(parsed);
         setNewStock(parsed.quantityStock);
@@ -72,7 +83,10 @@ export default function StockPage() {
       const res = await fetch(`/api/products/${product.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ quantityStock: Number(newStock) }),
+        body: JSON.stringify({
+          quantityStock: Number(newStock),
+          ...(activeBranchId ? { branchId: Number(activeBranchId) } : {}),
+        }),
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));

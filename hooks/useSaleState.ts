@@ -176,7 +176,7 @@ export const useSaleState = () => {
               .then((r) => (r.ok ? r.json() : {}))
               .catch(() => ({})) as Promise<any>,
             showCombos
-              ? fetch("/api/combos?all=true")
+              ? fetch(`/api/combos?all=true${activeBranchIdStr ? `&branchId=${activeBranchIdStr}` : ""}`)
                   .then((r) => (r.ok ? r.json() : []))
                   .catch(() => [])
               : Promise.resolve([]),
@@ -912,7 +912,7 @@ export const useSaleState = () => {
     setProductSearchTerm("");
     setSearchedProducts([]);
     toast.success(
-      `Combo "${combo.name}" agregado ($${comboPrice}, ahorro $${discount}).`,
+      `Combo "${combo.name}" agregado ($${comboPrice.toFixed(2)}, ahorro $${discount.toFixed(2)}).`,
     );
     setTimeout(() => productInputRef.current?.focus(), 50);
   };

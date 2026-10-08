@@ -24,10 +24,11 @@ const EditarComboPage = () => {
   const [description, setDescription] = useState('');
   const [imageUrl, setImageUrl] = useState('');
   const [active, setActive] = useState(true);
-  const [pricingMode, setPricingMode] = useState<'fixed' | 'percentage'>('fixed');
+  const [pricingMode, setPricingMode] = useState<'fixed' | 'percentage' | 'margin'>('fixed');
   const [fixedPrice, setFixedPrice] = useState('');
   const [discountPercent, setDiscountPercent] = useState('');
-  const [items, setItems] = useState<{ productId: number; productName: string; unitType?: Product['unitType']; quantity: number; defaultPrice: number; customPrice: string }[]>([]);
+  const [marginPercent, setMarginPercent] = useState('');
+  const [items, setItems] = useState<{ productId: number; productName: string; unitType?: Product['unitType']; quantity: number; defaultPrice: number; defaultCost: number; customPrice: string }[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [searchResults, setSearchResults] = useState<Product[]>([]);
   const [searching, setSearching] = useState(false);
@@ -53,6 +54,7 @@ const EditarComboPage = () => {
           unitType: i.product?.unitType,
           quantity: i.quantity,
           defaultPrice: i.product?.priceSale ?? 0,
+          defaultCost: parseFloat(String(i.product?.pricePurchase ?? 0)) || 0,
           customPrice: i.customPrice != null ? i.customPrice.toString() : '',
         })));
       } catch (err: unknown) {
@@ -133,6 +135,7 @@ const EditarComboPage = () => {
       unitType: product.unitType,
       quantity: product.unitType === 'UNIT' || !product.unitType ? 1 : 0.1,
       defaultPrice: product.priceSale,
+      defaultCost: parseFloat(String(product.pricePurchase ?? 0)) || 0,
       customPrice: '',
     }]);
     setSearchTerm('');
@@ -181,9 +184,16 @@ const EditarComboPage = () => {
     return sum + (unitPrice || 0) * (Number(i.quantity) || 0);
   }, 0);
 
+  // Costo = precio de compra de cada producto x cantidad. Con "Margen sobre
+  // costo" el precio del combo es costo + margen%, redondeado a centavos.
+  const totalCost = items.reduce((sum, i) => sum + (i.defaultCost || 0) * (Number(i.quantity) || 0), 0);
+  const itemsWithoutCost = items.filter(i => !(i.defaultCost > 0)).length;
+
   const effectivePrice = pricingMode === 'fixed'
     ? (parseFloat(fixedPrice) || 0)
-    : totalFullPrice * (1 - (parseFloat(discountPercent) || 0) / 100);
+    : pricingMode === 'margin'
+      ? Math.round(totalCost * (1 + (parseFloat(marginPercent) || 0) / 100) * 100) / 100
+      : totalFullPrice * (1 - (parseFloat(discountPercent) || 0) / 100);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -284,10 +294,26 @@ const EditarComboPage = () => {
               className={`flex-1 py-2 text-sm rounded-md font-medium transition-colors ${pricingMode === 'percentage' ? 'bg-primary text-primary-foreground' : 'bg-background border border-border text-foreground-muted'}`}>
               % de descuento
             </button>
+            <button type="button" onClick={() => setPricingMode('margin')}
+              className={`flex-1 py-2 text-sm rounded-md font-medium transition-colors ${pricingMode === 'margin' ? 'bg-primary text-primary-foreground' : 'bg-background border border-border text-foreground-muted'}`}>
+              Margen s/ costo
+            </button>
           </div>
 
           {pricingMode === 'fixed' ? (
             <Input type="number" step="0.01" min="0" value={fixedPrice} onChange={e => setFixedPrice(e.target.value)} />
+          ) : pricingMode === 'margin' ? (
+            <div className="flex gap-2 items-end">
+              <div className="flex-1">
+                <Input type="number" step="0.1" min="0" value={marginPercent} onChange={e => setMarginPercent(e.target.value)}
+                  placeholder="Margen sobre el precio de compra. Ej: 40" />
+              </div>
+              {totalCost > 0 && (
+                <p className="text-sm text-foreground-muted pb-2">
+                  = {formatCurrency(effectivePrice)}
+                </p>
+              )}
+            </div>
           ) : (
             <div className="flex gap-2 items-end">
               <div className="flex-1">
@@ -306,6 +332,26 @@ const EditarComboPage = () => {
               <span className="font-semibold text-foreground">{formatCurrency(totalFullPrice)}</span>
               {effectivePrice > 0 && effectivePrice < totalFullPrice && (
                 <span className="text-success text-xs">({Math.round((1 - effectivePrice / totalFullPrice) * 100)}% ahorro)</span>
+              )}
+            </div>
+          )}
+
+          {items.length > 0 && (
+            <div className="text-sm bg-background p-2 rounded border border-border space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Info size={14} className="text-primary" />
+                <span className="text-foreground-muted">Costo de los productos:</span>
+                <span className="font-semibold text-foreground">{formatCurrency(totalCost)}</span>
+              </div>
+              {totalCost > 0 && effectivePrice > 0 && (
+                <p className={`text-xs ${effectivePrice < totalCost ? 'text-destructive' : 'text-success'}`}>
+                  Margen sobre costo: {((effectivePrice / totalCost - 1) * 100).toFixed(1)}% · Ganancia: {formatCurrency(effectivePrice - totalCost)}
+                </p>
+              )}
+              {itemsWithoutCost > 0 && (
+                <p className="text-xs text-warning">
+                  {itemsWithoutCost} producto{itemsWithoutCost > 1 ? 's' : ''} sin precio de compra cargado: el costo está incompleto.
+                </p>
               )}
             </div>
           )}
@@ -340,7 +386,7 @@ const EditarComboPage = () => {
               <div key={item.productId} className="flex items-center gap-2 bg-background p-2 rounded-md border border-border">
                 <span className="flex-1 text-sm font-medium">
                   {item.productName}
-                  <span className="text-foreground-muted text-xs ml-1">({formatCurrency(item.defaultPrice)} / {unitLabel(item.unitType)})</span>
+                  <span className="text-foreground-muted text-xs ml-1">({formatCurrency(item.defaultPrice)} / {unitLabel(item.unitType)}{pricingMode === 'margin' ? ` · costo ${formatCurrency(item.defaultCost)}` : ''})</span>
                 </span>
                 <span className="text-[10px] font-semibold text-primary bg-primary/10 rounded px-1.5 py-1">{unitLabel(item.unitType)}</span>
                 <input type="number" min={item.unitType === 'UNIT' || !item.unitType ? '1' : '0.001'} step={item.unitType === 'UNIT' || !item.unitType ? '1' : '0.001'} value={item.quantity} onChange={e => updateItem(item.productId, 'quantity', e.target.value)}

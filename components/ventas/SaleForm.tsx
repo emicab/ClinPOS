@@ -14,6 +14,7 @@ import { SaleQuickAccess } from "./subcomponents/SaleQuickAccess";
 import WeightModal from "@/components/ventas/WeightModal";
 import UnitTypeModal from "@/components/ventas/UnitTypeModal";
 import { getPaymentTypeDisplay } from "@/lib/displayTexts";
+import { formatCurrency } from "@/lib/formatCurrency";
 import CajaModal from "./CajaModal";
 
 const SaleForm = () => {
@@ -157,7 +158,7 @@ const SaleForm = () => {
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border border-amber-400/40 bg-amber-500/5 text-amber-700 hover:bg-amber-100/50 transition-colors cursor-pointer"
                 >
                   Combo: {combo.name}{" "}
-                  <span className="opacity-80">({combo.price})</span>
+                  <span className="opacity-80">({formatCurrency(Number(combo.price))})</span>
                 </button>
               ))}
             </div>
