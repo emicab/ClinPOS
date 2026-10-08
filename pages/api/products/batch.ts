@@ -1,5 +1,6 @@
 import { NextApiRequest, NextApiResponse } from "next";
 import prisma from "@/lib/prisma";
+import { buildBulkProductWhere } from '@/lib/productFilters';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === "PUT" || req.method === "POST") {
@@ -9,22 +10,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const whereClause: any = {};
 
       if (allPages) {
-        if (filters?.search) {
-          whereClause.OR = [
-            { name: { contains: filters.search } },
-            { sku: { contains: filters.search } },
-          ];
-        }
-        if (filters?.brandId) {
-          whereClause.brandId = Number(filters.brandId);
-        }
-        if (filters?.categoryId) {
-          whereClause.categoryId = Number(filters.categoryId);
-        }
-        if (filters?.supplierId) {
-          whereClause.supplierId = Number(filters.supplierId);
-        }
-      } else if (Array.isArray(ids) && ids.length > 0) {
+      // Mismo criterio que la lista (sin tildes, sin ingredientes ocultos).
+      Object.assign(whereClause, await buildBulkProductWhere(prisma, filters));
+    } else if (Array.isArray(ids) && ids.length > 0) {
         whereClause.id = { in: ids.map((i: any) => Number(i)) };
       } else {
         return res.status(400).json({ message: "Debe proporcionar una lista de IDs o seleccionar todas las páginas." });

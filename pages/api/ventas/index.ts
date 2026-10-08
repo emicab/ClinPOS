@@ -161,7 +161,13 @@ export default async function handler(
 
     let calculatedTotalAmount = new Decimal(0);
     for (const item of items) {
-      if (item.quantity <= 0 || item.priceAtSale < 0) {
+      if (
+        !Number.isInteger(Number(item.productId)) ||
+        !Number.isFinite(Number(item.quantity)) ||
+        !Number.isFinite(Number(item.priceAtSale)) ||
+        Number(item.quantity) <= 0 ||
+        Number(item.priceAtSale) < 0
+      ) {
         return res.status(400).json({ message: `Cantidad o precio inválido para el producto ID ${item.productId}.` });
       }
       calculatedTotalAmount = calculatedTotalAmount.plus(new Decimal(item.priceAtSale).times(item.quantity));

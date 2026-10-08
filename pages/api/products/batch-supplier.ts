@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
+import { buildBulkProductWhere } from '../../../lib/productFilters';
 
 export default async function handler(
   req: NextApiRequest,
@@ -14,16 +15,9 @@ export default async function handler(
 
   let whereClause: any = {};
   if (allPages) {
-    if (filters?.search) {
-      whereClause.OR = [
-        { name: { contains: filters.search } },
-        { sku: { contains: filters.search } },
-      ];
-    }
-    if (filters?.brandId) whereClause.brandId = Number(filters.brandId);
-    if (filters?.categoryId) whereClause.categoryId = Number(filters.categoryId);
-    if (filters?.supplierId) whereClause.supplierId = Number(filters.supplierId);
-  } else if (Array.isArray(productIds) && productIds.length > 0) {
+      // Mismo criterio que la lista (sin tildes, sin ingredientes ocultos).
+      Object.assign(whereClause, await buildBulkProductWhere(prisma, filters));
+    } else if (Array.isArray(productIds) && productIds.length > 0) {
     whereClause.id = { in: productIds.map((id: any) => parseInt(id)) };
   } else {
     return res.status(400).json({ message: 'productIds debe ser un array no vacío o especificar allPages.' });

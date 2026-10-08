@@ -1,6 +1,7 @@
 // pages/api/products/batch-delete.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
+import { buildBulkProductWhere } from '../../../lib/productFilters';
 import { handleApiError } from '../../../lib/apiErrorHandler';
 
 export default async function handler(
@@ -27,15 +28,8 @@ export default async function handler(
     const whereClause: any = {};
 
     if (selectAll) {
-      if (filters?.search) {
-        whereClause.OR = [
-          { name: { contains: filters.search } },
-          { sku: { contains: filters.search } },
-        ];
-      }
-      if (filters?.brandId) whereClause.brandId = Number(filters.brandId);
-      if (filters?.categoryId) whereClause.categoryId = Number(filters.categoryId);
-      if (filters?.supplierId) whereClause.supplierId = Number(filters.supplierId);
+      // Mismo criterio que la lista (sin tildes, sin ingredientes ocultos).
+      Object.assign(whereClause, await buildBulkProductWhere(prisma, filters));
     } else if (Array.isArray(idList) && idList.length > 0) {
       whereClause.id = { in: idList.map((i: any) => Number(i)) };
     } else {
