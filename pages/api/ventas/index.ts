@@ -7,6 +7,14 @@ import { sanitizeString } from '../../../lib/sanitize';
 import { getArcaConfig, createElectronicInvoice } from '../../../lib/arcaService';
 import { getPaymentTypeDisplay } from '../../../lib/displayTexts';
 import { getDeviceBranchId } from '../../../lib/branchIdentity';
+import {
+  computeOrderIngredientShortfall,
+  formatIngredientShortfall,
+  computeRecipeCost,
+  deductRecipeStock,
+  getRecipeAvailability,
+} from '../../../lib/recipeStock';
+import { enqueueOutbox, enqueueStockMovement } from '../../../lib/syncOutbox';
 
 interface SaleItemInput {
   productId: number;
@@ -277,6 +285,9 @@ export default async function handler(
       }
 
       const affectedIngredientIds: number[] = [];
+      // Productos elaborados de esta venta: se reutiliza al encolar el sync para
+      // no consultar cada producto otra vez fuera de la transaccion.
+      const recipeProductIds = new Set<number>();
       const result = await prisma.$transaction(async (tx) => {
         if (discountCodeRecord) {
           await tx.discountCode.update({
@@ -367,7 +378,6 @@ export default async function handler(
         // correcto por tipo pero NO sumable entre variantes que comparten
         // ingredientes (ej. 2A + 2B puede superar la harina disponible).
         if (!isPending) {
-          const { computeOrderIngredientShortfall, formatIngredientShortfall } = await import("../../../lib/recipeStock");
           const combinedBranchId = effectiveBranchId ?? (req.body.branchId ? parseInt(req.body.branchId) : undefined);
           const shortfalls = await computeOrderIngredientShortfall(
             tx,
@@ -381,7 +391,14 @@ export default async function handler(
           }
         }
 
-        for (const item of items) {          const product = await tx.product.findUnique({ where: { id: item.productId } });
+        // Una sola consulta para todos los productos (antes: un findUnique por item).
+        const productRows = await tx.product.findMany({
+          where: { id: { in: Array.from(new Set(items.map((i) => i.productId))) } },
+        });
+        const productById = new Map(productRows.map((p) => [p.id, p]));
+
+        for (const item of items) {
+          const product = productById.get(item.productId);
           if (!product) {
             throw new Error(`Producto con ID ${item.productId} no encontrado.`);
           }
@@ -389,6 +406,7 @@ export default async function handler(
           const bId = effectiveBranchId ?? (req.body.branchId ? parseInt(req.body.branchId) : undefined);
           const recipeBranchId = bId && !isNaN(bId) ? bId : undefined;
           const isRecipeProduct = product.isRecipe === true;
+          if (isRecipeProduct) recipeProductIds.add(product.id);
 
           // Validación de stock de productos simples. Los elaborados ya se
           // validaron de forma combinada contra los ingredientes (antes del loop).
@@ -410,7 +428,6 @@ export default async function handler(
 
           // Elaborado: el costo se calcula desde sus ingredientes (Σ costo × cantidad).
           if (isRecipeProduct) {
-            const { computeRecipeCost } = await import("../../../lib/recipeStock");
             purchasePriceAtSale = (await computeRecipeCost(tx, item.productId)).cost;
           }
 
@@ -428,7 +445,6 @@ export default async function handler(
           if (!isPending) {
             if (isRecipeProduct) {
               // Elaborado: no se descuenta su propio stock, sino el de los ingredientes.
-              const { deductRecipeStock } = await import("../../../lib/recipeStock");
               const affected = await deductRecipeStock(tx, item.productId, item.quantity, recipeBranchId);
               affectedIngredientIds.push(...affected);
             } else {
@@ -469,19 +485,20 @@ export default async function handler(
           if (!isPending) {
             if (isRecipeProduct) {
               // Alerta de elaborado: comparar la disponibilidad derivada contra el mínimo.
-              const { getRecipeAvailability } = await import("../../../lib/recipeStock");
               const afterAvailability = await getRecipeAvailability(tx, item.productId, recipeBranchId);
               if (product.stockMinAlert !== null && afterAvailability.available < product.stockMinAlert) {
                 console.warn(`[STOCK ALERT] El producto elaborado "${product.name}" (ID: ${product.id}) quedó con disponibilidad ${afterAvailability.available} por debajo del mínimo (${product.stockMinAlert}).`);
               }
             } else {
-              const updatedProduct = await tx.product.findUnique({
-                where: { id: item.productId },
-                select: { id: true, name: true, quantityStock: true, stockMinAlert: true }
-              });
-              if (updatedProduct && updatedProduct.stockMinAlert !== null && updatedProduct.quantityStock < updatedProduct.stockMinAlert) {
-                console.warn(`[STOCK ALERT] El producto "${updatedProduct.name}" (ID: ${updatedProduct.id}) ha quedado por debajo del mínimo de alerta de stock (${updatedProduct.stockMinAlert}). Stock actual: ${updatedProduct.quantityStock}`);
-                console.log(`[MOCK EMAIL] Enviado correo ficticio a: administracion@empresa.com | Asunto: Alerta de Stock Mínimo - ${updatedProduct.name} | Contenido: El producto "${updatedProduct.name}" tiene ${updatedProduct.quantityStock} unidades disponibles (Umbral mínimo: ${updatedProduct.stockMinAlert}).`);
+              // Solo se relee el stock si el producto tiene un minimo definido.
+              if (product.stockMinAlert !== null) {
+                const updatedProduct = await tx.product.findUnique({
+                  where: { id: item.productId },
+                  select: { id: true, name: true, quantityStock: true, stockMinAlert: true }
+                });
+                if (updatedProduct && updatedProduct.stockMinAlert !== null && updatedProduct.quantityStock < updatedProduct.stockMinAlert) {
+                  console.warn(`[STOCK ALERT] El producto "${updatedProduct.name}" (ID: ${updatedProduct.id}) ha quedado por debajo del mínimo de alerta de stock (${updatedProduct.stockMinAlert}). Stock actual: ${updatedProduct.quantityStock}`);
+                }
               }
             }
           }
@@ -513,20 +530,15 @@ export default async function handler(
       // [MODIFICADO] Fire-and-forget: encolar venta + productos vendidos en el
       // outbox. El sync a la nube lo hace el auto-sync/drain sin bloquear la venta.
       try {
-        const { enqueueOutbox, enqueueStockMovement } = await import("../../../lib/syncOutbox");
         if (result?.id) {
           await enqueueOutbox("Sale", "UPSERT", String(result.id));
         }
         const productIds = items.map((item: any) => item.productId);
         if (result?.id && req.body.status !== 'PENDING') {
           for (const [index, item] of items.entries()) {
-            const product = await prisma.product.findUnique({
-              where: { id: item.productId },
-              select: { isRecipe: true },
-            });
             // Los elaborados descuentan ingredientes; esos movimientos se
             // incorporan en una etapa específica del recetario.
-            if (!product?.isRecipe) {
+            if (!recipeProductIds.has(item.productId)) {
               await enqueueStockMovement({
                 operationId: `sale:${result.id}:item:${index}`,
                 productId: item.productId,

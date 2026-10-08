@@ -169,7 +169,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const dbFile = `business_${id}.db`;
       const src = resolveDbFile(getDefaultDbFileName());
       const dst = resolveDbFile(dbFile);
-      fs.copyFileSync(src, dst);
+      // VACUUM INTO genera una copia consistente (incluye lo que aun esta en el
+      // -wal); copiar el archivo en vivo puede perder datos o salir corrupto.
+      try {
+        const defaultClient = await getClientByProfileId(null);
+        if (!defaultClient) throw new Error('sin cliente default');
+        if (fs.existsSync(dst)) fs.unlinkSync(dst);
+        await defaultClient.$executeRawUnsafe(`VACUUM INTO '${dst.replace(/\\/g, '/').replace(/'/g, "''")}'`);
+      } catch (e) {
+        console.warn('[Profiles] VACUUM INTO falló, se copia el archivo:', e);
+        fs.copyFileSync(src, dst);
+      }
 
       const profile = await createProfile({ id, name: cleanName, businessSector: sector, dbFile });
       resetProfileCache();

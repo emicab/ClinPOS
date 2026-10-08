@@ -696,6 +696,46 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX IF NOT EXISTS "SyncConflict_entity_entityKey_status_idx" ON "SyncConflict"("entity", "entityKey", "status");
         "#,
     },
+    Migration {
+        version: 27,
+        name: "add_performance_indexes",
+        // Solo aditiva: crea indices sobre columnas existentes (sin tocar datos).
+        sql: r#"
+            CREATE INDEX IF NOT EXISTS "Sale_saleDate_idx" ON "Sale"("saleDate");
+            CREATE INDEX IF NOT EXISTS "Sale_clientId_idx" ON "Sale"("clientId");
+            CREATE INDEX IF NOT EXISTS "Sale_sellerId_idx" ON "Sale"("sellerId");
+            CREATE INDEX IF NOT EXISTS "Sale_cashRegisterId_idx" ON "Sale"("cashRegisterId");
+            CREATE INDEX IF NOT EXISTS "Sale_branchId_idx" ON "Sale"("branchId");
+            CREATE INDEX IF NOT EXISTS "Sale_status_idx" ON "Sale"("status");
+            CREATE INDEX IF NOT EXISTS "SaleItem_saleId_idx" ON "SaleItem"("saleId");
+            CREATE INDEX IF NOT EXISTS "SaleItem_productId_idx" ON "SaleItem"("productId");
+            CREATE INDEX IF NOT EXISTS "Product_categoryId_idx" ON "Product"("categoryId");
+            CREATE INDEX IF NOT EXISTS "Product_brandId_idx" ON "Product"("brandId");
+            CREATE INDEX IF NOT EXISTS "Product_supplierId_idx" ON "Product"("supplierId");
+            CREATE INDEX IF NOT EXISTS "Product_isPublicWeb_idx" ON "Product"("isPublicWeb");
+            CREATE INDEX IF NOT EXISTS "Purchase_supplierId_idx" ON "Purchase"("supplierId");
+            CREATE INDEX IF NOT EXISTS "Purchase_purchaseDate_idx" ON "Purchase"("purchaseDate");
+            CREATE INDEX IF NOT EXISTS "PurchaseItem_purchaseId_idx" ON "PurchaseItem"("purchaseId");
+            CREATE INDEX IF NOT EXISTS "PurchaseItem_productId_idx" ON "PurchaseItem"("productId");
+            CREATE INDEX IF NOT EXISTS "ComboItem_comboId_idx" ON "ComboItem"("comboId");
+            CREATE INDEX IF NOT EXISTS "ComboItem_productId_idx" ON "ComboItem"("productId");
+            CREATE INDEX IF NOT EXISTS "WebOrder_status_idx" ON "WebOrder"("status");
+            CREATE INDEX IF NOT EXISTS "WebOrder_createdAt_idx" ON "WebOrder"("createdAt");
+            CREATE INDEX IF NOT EXISTS "WebOrder_branchId_idx" ON "WebOrder"("branchId");
+            CREATE INDEX IF NOT EXISTS "WebOrderItem_webOrderId_idx" ON "WebOrderItem"("webOrderId");
+            CREATE INDEX IF NOT EXISTS "WebOrderItem_productId_idx" ON "WebOrderItem"("productId");
+            CREATE INDEX IF NOT EXISTS "CashMovement_cashRegisterId_idx" ON "CashMovement"("cashRegisterId");
+            CREATE INDEX IF NOT EXISTS "CashMovement_sourceId_idx" ON "CashMovement"("sourceId");
+            CREATE INDEX IF NOT EXISTS "AccountMovement_accountBalanceId_idx" ON "AccountMovement"("accountBalanceId");
+            CREATE INDEX IF NOT EXISTS "AccountMovement_saleId_idx" ON "AccountMovement"("saleId");
+            CREATE INDEX IF NOT EXISTS "StockTransferItem_productId_idx" ON "StockTransferItem"("productId");
+            CREATE INDEX IF NOT EXISTS "ProductBranchStock_branchId_idx" ON "ProductBranchStock"("branchId");
+            CREATE INDEX IF NOT EXISTS "Expense_expenseDate_idx" ON "Expense"("expenseDate");
+            CREATE INDEX IF NOT EXISTS "CashRegister_status_idx" ON "CashRegister"("status");
+            CREATE INDEX IF NOT EXISTS "ConsignmentItem_consignmentId_idx" ON "ConsignmentItem"("consignmentId");
+            CREATE INDEX IF NOT EXISTS "ConsignmentItem_productId_idx" ON "ConsignmentItem"("productId");
+        "#,
+    },
 ];
 
 // ── Declarative safety net ─────────────────────────────────────────────
@@ -951,6 +991,15 @@ fn run_migrations(db_path: &Path) {
         }
     };
 
+    // WAL: lecturas concurrentes con escrituras (sync + ventas) y commits mas
+    // rapidos. Es una propiedad persistente del archivo; no altera datos. Los
+    // backups usan VACUUM INTO y el restore limpia -wal/-shm, asi que es seguro.
+    match conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get::<_, String>(0)) {
+        Ok(mode) if mode.eq_ignore_ascii_case("wal") => {}
+        Ok(mode) => log_line!("[Migrations] journal_mode={} (no se pudo activar WAL en {})", mode, db_path.display()),
+        Err(e) => log_line!("[Migrations] No se pudo activar WAL en {}: {}", db_path.display(), e),
+    }
+
     // Create the migrations tracking table if it doesn't exist
     if let Err(e) = conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS _app_migrations (
@@ -981,7 +1030,9 @@ fn run_migrations(db_path: &Path) {
                 log_line!("[Migrations] Backup pre-migración: {}", bak.display());
                 // Podar backups viejos, conservar los 3 más recientes.
                 if let Some(parent) = db_path.parent() {
-                    prune_backups(parent, "crm_prod.db.", 3);
+                    // "<archivo>.<fecha 20xx...>.bak"; no incluye los .pre-restore-.
+                    let name = db_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    prune_backups(parent, &format!("{}.20", name), 3);
                 }
             }
             Err(e) => log_line!("[Migrations] No se pudo crear backup: {}", e),
@@ -1105,6 +1156,34 @@ fn active_db_path(app_handle: &tauri::AppHandle) -> PathBuf {
         }
     }
     default
+}
+
+/// Archivos de base de todos los negocios registrados en `store.json` (el
+/// registro de perfiles vive junto a la DB principal). Cada negocio es una base
+/// SQLite independiente y debe recibir las mismas migraciones que `crm_prod.db`.
+fn profile_db_files(data_dir: &Path) -> Vec<PathBuf> {
+    let raw = match fs::read_to_string(data_dir.join("store.json")) {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+    let store: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+    store
+        .get("profiles")
+        .and_then(|p| p.as_array())
+        .map(|profiles| {
+            profiles
+                .iter()
+                .filter_map(|p| p.get("dbFile").and_then(|v| v.as_str()))
+                .map(|f| {
+                    let c = Path::new(f);
+                    if c.is_absolute() { c.to_path_buf() } else { data_dir.join(c) }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Copia consistente de la base con `VACUUM INTO`: genera un archivo SQLite
@@ -1665,6 +1744,16 @@ pub fn run() {
         // Run auto-migrations before starting the server
         run_migrations(&target_db);
 
+        // Los demas negocios (store.json) tambien necesitan las migraciones: antes
+        // solo se migraba crm_prod.db y las bases de otros negocios quedaban atras.
+        for extra in profile_db_files(&app_data_dir) {
+          if extra.file_name() == target_db.file_name() || !extra.exists() {
+            continue;
+          }
+          log_line!("[Migrations] Migrando base de negocio {}", extra.display());
+          run_migrations(&extra);
+        }
+
         let db_url = format!("file:{}", target_db.to_string_lossy().replace('\\', "/"));
 
         let standalone_dir = resolve_standalone_dir(&resource_dir);
@@ -1950,6 +2039,97 @@ mod tests {
         let read = Entry::new(service, &user).unwrap().get_password();
         let _ = Entry::new(service, &user).unwrap().delete_credential();
         assert_eq!(read.unwrap(), "valor-de-prueba");
+    }
+
+    fn table_counts(conn: &Connection) -> Vec<(String, i64)> {
+        let names: Vec<String> = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != '_app_migrations' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+        names
+            .into_iter()
+            .map(|n| {
+                let c: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM \"{}\"", n), [], |r| r.get(0)).unwrap();
+                (n, c)
+            })
+            .collect()
+    }
+
+    /// Una base existente (copia de la plantilla real + datos) debe migrar sin
+    /// perder ni una fila, quedar en WAL con los indices nuevos y poder
+    /// migrarse otra vez sin efectos (idempotente).
+    #[test]
+    fn migrations_keep_all_rows_add_indexes_and_enable_wal() {
+        let dir = scratch_dir("migrate");
+        let template = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("prisma").join("crm_template.db");
+        assert!(template.exists(), "falta prisma/crm_template.db");
+        let db = dir.join("business_x.db");
+        fs::copy(&template, &db).unwrap();
+        {
+            let conn = Connection::open(&db).unwrap();
+            conn.execute("INSERT OR REPLACE INTO Setting (key, value) VALUES ('test_key', 'test_value')", []).unwrap();
+        }
+        let before = table_counts(&Connection::open(&db).unwrap());
+
+        run_migrations(&db);
+        let conn = Connection::open(&db).unwrap();
+        assert_eq!(table_counts(&conn), before, "la migracion no debe cambiar la cantidad de filas");
+
+        let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        let max: i32 = conn.query_row("SELECT MAX(version) FROM _app_migrations", [], |r| r.get(0)).unwrap();
+        assert_eq!(max, MIGRATIONS.last().unwrap().version);
+        for idx in ["Sale_saleDate_idx", "SaleItem_saleId_idx", "Product_categoryId_idx", "WebOrder_status_idx"] {
+            let n: i64 = conn
+                .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name = ?1", [idx], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 1, "falta el indice {}", idx);
+        }
+        let value: String = conn.query_row("SELECT value FROM Setting WHERE key='test_key'", [], |r| r.get(0)).unwrap();
+        assert_eq!(value, "test_value");
+        drop(conn);
+
+        run_migrations(&db);
+        assert_eq!(table_counts(&Connection::open(&db).unwrap()), before);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Verifica una COPIA de una base real: `CLINPOS_TEST_DB=<ruta.db> cargo test
+    /// -- --ignored migrates_real_copy`. Nunca apuntar a la base en uso.
+    #[test]
+    #[ignore]
+    fn migrates_real_copy() {
+        let src = std::env::var("CLINPOS_TEST_DB").expect("definir CLINPOS_TEST_DB");
+        let dir = scratch_dir("realcopy");
+        let db = dir.join("copy.db");
+        fs::copy(&src, &db).unwrap();
+        let before = table_counts(&Connection::open(&db).unwrap());
+        run_migrations(&db);
+        let conn = Connection::open(&db).unwrap();
+        assert_eq!(table_counts(&conn), before);
+        let check: String = conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)).unwrap();
+        assert_eq!(check, "ok");
+        let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+        assert_eq!(mode.to_lowercase(), "wal");
+        println!("OK {} tablas, filas intactas, integrity_check ok, WAL", before.len());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn profile_db_files_reads_every_business() {
+        let dir = scratch_dir("profiles");
+        fs::write(
+            dir.join("store.json"),
+            r#"{"version":1,"activeProfileId":"b1","profiles":[{"id":"legacy","dbFile":"crm_prod.db"},{"id":"b1","dbFile":"business_b1.db"}]}"#,
+        )
+        .unwrap();
+        let files = profile_db_files(&dir);
+        assert_eq!(files, vec![dir.join("crm_prod.db"), dir.join("business_b1.db")]);
+        assert!(profile_db_files(&dir.join("no-existe")).is_empty());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

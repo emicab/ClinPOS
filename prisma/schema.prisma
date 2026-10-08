@@ -65,6 +65,11 @@ model Product {
   costHistory      RecipeCostHistory[]
   modifierGroups   ProductModifierGroup[]
   modifierOptionIngredientOf ProductModifierOption[] @relation("ModifierOptionIngredient")
+
+  @@index([categoryId])
+  @@index([brandId])
+  @@index([supplierId])
+  @@index([isPublicWeb])
 }
 
 model RecipeItem {
@@ -151,6 +156,13 @@ model Sale {
   invoice             Invoice?
   accountMovements    AccountMovement[]
   status              SaleStatus        @default(COMPLETED)
+
+  @@index([saleDate])
+  @@index([clientId])
+  @@index([sellerId])
+  @@index([cashRegisterId])
+  @@index([branchId])
+  @@index([status])
 }
 
 enum SaleStatus {
@@ -172,6 +184,9 @@ model SaleItem {
   modifiers           String?  // JSON snapshot de modificadores/opciones seleccionadas
   product             Product? @relation(fields: [productId], references: [id])
   sale                Sale     @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+  @@index([productId])
 }
 
 model Expense {
@@ -184,6 +199,8 @@ model Expense {
   notes       String?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
+
+  @@index([expenseDate])
 }
 
 model Combo {
@@ -206,6 +223,9 @@ model ComboItem {
   customPrice Decimal?
   combo   Combo   @relation(fields: [comboId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id])
+
+  @@index([comboId])
+  @@index([productId])
 }
 
 model Promotion {
@@ -282,6 +302,9 @@ model Purchase {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([supplierId])
+  @@index([purchaseDate])
 }
 
 model PurchaseItem {
@@ -295,6 +318,9 @@ model PurchaseItem {
 
   productId Int
   product   Product @relation(fields: [productId], references: [id])
+
+  @@index([purchaseId])
+  @@index([productId])
 }
 
 enum PaymentType {
@@ -346,6 +372,8 @@ model CashRegister {
   updatedAt       DateTime  @updatedAt
   movements       CashMovement[]
   sales           Sale[]
+
+  @@index([status])
 }
 
 model CashMovement {
@@ -358,6 +386,9 @@ model CashMovement {
   description     String?
   createdAt       DateTime  @default(now())
   cashRegister    CashRegister @relation(fields: [cashRegisterId], references: [id])
+
+  @@index([cashRegisterId])
+  @@index([sourceId])
 }
 
 model Setting {
@@ -402,6 +433,9 @@ model AccountMovement {
   createdAt        DateTime       @default(now())
   accountBalance   AccountBalance @relation(fields: [accountBalanceId], references: [id], onDelete: Cascade)
   sale             Sale?          @relation(fields: [saleId], references: [id])
+
+  @@index([accountBalanceId])
+  @@index([saleId])
 }
 
 model User {
@@ -466,6 +500,9 @@ model ConsignmentItem {
   priceAtGiven     Decimal
   consignment      Consignment @relation(fields: [consignmentId], references: [id], onDelete: Cascade)
   product          Product     @relation(fields: [productId], references: [id])
+
+  @@index([consignmentId])
+  @@index([productId])
 }
 
 model CreditCardPromotion {
@@ -580,6 +617,10 @@ model WebOrder {
   createdAt       DateTime       @default(now())
   updatedAt       DateTime       @updatedAt
   items           WebOrderItem[]
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([branchId])
 }
 
 model WebOrderItem {
@@ -593,6 +634,9 @@ model WebOrderItem {
   externalItemId String?  // id del item del pedido externo (PeYA items[]._id) para UPDATE_CART futuro
   webOrder       WebOrder @relation(fields: [webOrderId], references: [id], onDelete: Cascade)
   product     Product  @relation(fields: [productId], references: [id])
+
+  @@index([webOrderId])
+  @@index([productId])
 }
 
 model Branch {
@@ -620,6 +664,8 @@ model ProductBranchStock {
   branch        Branch               @relation(fields: [branchId], references: [id], onDelete: Cascade)
 
   @@id([productId, branchId])
+
+  @@index([branchId])
 }
 
 model StockTransfer {
@@ -645,6 +691,8 @@ model StockTransferItem {
   product          Product       @relation(fields: [productId], references: [id])
 
   @@id([transferId, productId])
+
+  @@index([productId])
 }
 
 // Outbox transaccional: registra operaciones pendientes de subir a la nube.
