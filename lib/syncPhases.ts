@@ -358,23 +358,38 @@ export async function revalidateLicenseIfMain(isMainDeviceFlag: boolean): Promis
 export async function bootstrapBranchStocks(mainBranchId: number | null): Promise<void> {
   if (!mainBranchId) return;
   try {
-    const products = await prisma.product.findMany({
-      where: { isRecipe: false },
-      select: { id: true, quantityStock: true }
+    const branchCount = await prisma.branch.count();
+
+    // Productos SIN ninguna fila de stock por sucursal: se crea la de la Principal con el
+    // stock global (instalaciones/datos legados).
+    const withoutRows = await prisma.product.findMany({
+      where: { isRecipe: false, branchStocks: { none: {} } },
+      select: { id: true, quantityStock: true },
     });
-    for (const p of products) {
-      const existing = await prisma.productBranchStock.findUnique({
-        where: { productId_branchId: { productId: p.id, branchId: mainBranchId } }
+    if (withoutRows.length > 0) {
+      await prisma.productBranchStock.createMany({
+        data: withoutRows.map((p) => ({ productId: p.id, branchId: mainBranchId, quantityStock: p.quantityStock })),
       });
-      if (!existing) {
-        await prisma.productBranchStock.create({
-          data: { productId: p.id, branchId: mainBranchId, quantityStock: p.quantityStock }
-        });
-      } else if (existing.quantityStock !== p.quantityStock) {
-        await prisma.productBranchStock.update({
-          where: { productId_branchId: { productId: p.id, branchId: mainBranchId } },
-          data: { quantityStock: p.quantityStock }
-        });
+    }
+
+    // Con UNA sola sucursal, la Principal es el unico lugar con stock: se alinea con el
+    // global. Con varias NO: el global es la SUMA de todas las sucursales y copiarlo a la
+    // Principal inflaba su stock con el de las demas en cada sync (antes se hacia siempre,
+    // ademas con ~2 consultas por producto en cada ciclo).
+    if (branchCount <= 1) {
+      const [products, mainRows] = await Promise.all([
+        prisma.product.findMany({ where: { isRecipe: false }, select: { id: true, quantityStock: true } }),
+        prisma.productBranchStock.findMany({ where: { branchId: mainBranchId }, select: { productId: true, quantityStock: true } }),
+      ]);
+      const mainByProduct = new Map(mainRows.map((r) => [r.productId, r.quantityStock]));
+      for (const p of products) {
+        const current = mainByProduct.get(p.id);
+        if (current !== undefined && current !== p.quantityStock) {
+          await prisma.productBranchStock.update({
+            where: { productId_branchId: { productId: p.id, branchId: mainBranchId } },
+            data: { quantityStock: p.quantityStock },
+          });
+        }
       }
     }
   } catch (initErr) {
@@ -421,9 +436,13 @@ export async function loadLocalEntities(lastSync: Date, forceFullSync: boolean, 
     cashRegisters: await prisma.cashRegister.findMany({ where: recent("CashRegister") }),
     accountBalances: await prisma.accountBalance.findMany({ where: recent("AccountBalance") }),
     combos: await prisma.combo.findMany({ where: recent("Combo") }),
-    sales: await prisma.sale.findMany({ where: recent("Sale") }),
+    // Solo ventas COMPLETED: la nube no tiene columna de estado, asi que un pedido pendiente
+    // (sin cobrar) o cancelado se veria como una venta mas en los reportes de la nube.
+    sales: await prisma.sale.findMany({ where: { ...recent("Sale"), status: "COMPLETED" } }),
     saleItems: await prisma.saleItem.findMany({
-      where: forceFullSync ? {} : { sale: { updatedAt: { gt: cursorFor("Sale") } } }
+      where: forceFullSync
+        ? { sale: { status: "COMPLETED" } }
+        : { sale: { updatedAt: { gt: cursorFor("Sale") }, status: "COMPLETED" } }
     }),
     purchases: await prisma.purchase.findMany({ where: recent("Purchase") }),
     purchaseItems: await prisma.purchaseItem.findMany({
@@ -575,6 +594,8 @@ export function buildPushPayload(
       id: s.id, saleDate: s.saleDate.toISOString(), totalAmount: fmtDec(s.totalAmount), tenant_id: tenantId,
       paymentType: s.paymentType, notes: s.notes, clientId: s.clientId, sellerId: s.sellerId ?? 1,
       cashRegisterId: s.cashRegisterId, discountCodeApplied: s.discountCodeApplied,
+      // La nube tiene estas columnas y no se enviaban (se perdia la sucursal y si fue en cuenta).
+      branchId: s.branchId ?? null, onAccount: s.onAccount ?? false, promotionsApplied: s.promotionsApplied ?? null,
       createdAt: s.createdAt.toISOString(), updatedAt: s.updatedAt.toISOString()
     })),
     SaleItem: saleItems.map(si => ({

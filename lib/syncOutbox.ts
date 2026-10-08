@@ -200,12 +200,15 @@ async function pushSale(saleId: number, tenantId: string): Promise<boolean> {
     include: { items: true },
   });
   if (!sale) return false;
+  // Pendientes/canceladas no se suben (la nube no tiene estado): nada que enviar.
+  if (sale.status !== "COMPLETED") return true;
 
   const payload: Record<string, any[]> = {
     Sale: [{
       id: sale.id, saleDate: sale.saleDate.toISOString(), totalAmount: fmtDec(sale.totalAmount), tenant_id: tenantId,
       paymentType: sale.paymentType, notes: sale.notes, clientId: sale.clientId, sellerId: sale.sellerId ?? 1,
       cashRegisterId: sale.cashRegisterId, discountCodeApplied: sale.discountCodeApplied,
+      branchId: sale.branchId ?? null, onAccount: sale.onAccount ?? false, promotionsApplied: sale.promotionsApplied ?? null,
       createdAt: sale.createdAt.toISOString(), updatedAt: sale.updatedAt.toISOString()
     }],
     SaleItem: sale.items.map(si => ({
