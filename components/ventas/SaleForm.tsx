@@ -149,18 +149,26 @@ const SaleForm = () => {
 
           {/* Listado de Combos y Recientes (Opcional, en base a módulos) */}
           {combos.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 py-1">
-              {combos.map((combo) => (
-                <button
-                  key={combo.id}
-                  type="button"
-                  onClick={() => handleSelectCombo(combo)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border border-amber-400/40 bg-amber-500/5 text-amber-700 hover:bg-amber-100/50 transition-colors cursor-pointer"
-                >
-                  Combo: {combo.name}{" "}
-                  <span className="opacity-80">({formatCurrency(Number(combo.price))})</span>
-                </button>
-              ))}
+            // Una sola fila con scroll horizontal: con muchos combos una grilla que envuelve
+            // empujaba hacia abajo el resto de la pantalla de venta.
+            <div className="flex items-center gap-2 py-1">
+              <span className="shrink-0 text-[10px] font-bold uppercase tracking-wide text-amber-700">
+                Combos
+              </span>
+              <div className="flex gap-1.5 overflow-x-auto pb-1 min-w-0">
+                {combos.map((combo) => (
+                  <button
+                    key={combo.id}
+                    type="button"
+                    onClick={() => handleSelectCombo(combo)}
+                    title={`${combo.name} (${formatCurrency(Number(combo.price))})`}
+                    className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border border-amber-400/40 bg-amber-500/5 text-amber-700 hover:bg-amber-100/50 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    {combo.name}{" "}
+                    <span className="opacity-80">({formatCurrency(Number(combo.price))})</span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
 
