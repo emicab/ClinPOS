@@ -175,11 +175,12 @@ export const useSaleState = () => {
             fetch("/api/caja")
               .then((r) => (r.ok ? r.json() : {}))
               .catch(() => ({})) as Promise<any>,
-            showCombos
-              ? fetch(`/api/combos?all=true${activeBranchIdStr ? `&branchId=${activeBranchIdStr}` : ""}`)
-                  .then((r) => (r.ok ? r.json() : []))
-                  .catch(() => [])
-              : Promise.resolve([]),
+            // Los combos se cargan SIEMPRE: el menu Combos le aparece a un Administrador sin
+            // importar el modulo, y con el modulo apagado se podian crear combos que luego no
+            // aparecian al vender. Solo las promociones automaticas dependen del modulo.
+            fetch(`/api/combos?all=true${activeBranchIdStr ? `&branchId=${activeBranchIdStr}` : ""}`)
+              .then((r) => (r.ok ? r.json() : []))
+              .catch(() => []),
             showCombos
               ? fetch("/api/promotions")
                   .then((r) => (r.ok ? r.json() : []))
@@ -219,7 +220,7 @@ export const useSaleState = () => {
           }));
         }
 
-        if (showCombos) {
+        {
           // El endpoint sin ?all=true devuelve el formato "venta/web"
           // (priceSale string, items planos sin `product` ni `active`), que es
           // incompatible con handleSelectCombo. Pedimos ?all=true (formato

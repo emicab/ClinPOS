@@ -8,6 +8,8 @@ Todos los cambios notables realizados en el proyecto están detallados a continu
 - **Hay que volver a cargar las claves guardadas en el POS** (certificado y clave de ARCA, API key de Gemini, credenciales de Cloudinary): antes el secreto de cifrado se regeneraba en cada arranque y esos datos no se podían leer. Desde esta versión el secreto queda guardado de forma permanente en el Almacén de credenciales de Windows.
 
 ### Corregido
+- **Arranque lento (hasta 60 s)**: el chequeo de salud de la base fallaba al serializar un valor numérico grande y la app esperaba el tiempo máximo antes de mostrarse.
+- **Combos que no aparecían al vender**: con el módulo "Combos y promociones" apagado se podían crear combos (el menú los muestra al Administrador) pero Nueva Venta no los cargaba. Ahora los combos se cargan siempre; solo las promociones automáticas dependen del módulo.
 - **Combos con stock 0 en Nueva Venta**: el POS recibía los combos sin stock de sus productos y los mostraba agotados. Ahora respeta la sucursal y el stock derivado de recetas.
 - **"Cargar stock" y el importador CSV** actualizaban solo el stock global y no el de la sucursal (la pantalla de venta seguía mostrando el valor viejo). Ahora cargan la sucursal del equipo y recalculan el total; además conservan decimales (kg/L) y encolan el sync.
 - **Compras, consignaciones y edición de producto**: el stock por sucursal quedaba desfasado del global al editar/borrar una compra recibida, entregar/devolver consignaciones o guardar un producto sin sucursal.
@@ -23,6 +25,7 @@ Todos los cambios notables realizados en el proyecto están detallados a continu
 - **Licencias**: el plan se decide por el prefijo de la clave (una clave Básica con "PRO" en la parte aleatoria se activaba como Pro). La validación y activación usan funciones de la nube (la tabla ya no es pública). Los equipos sin actualizar quedan en modo "sin conexión" y conservan su plan.
 
 ### Añadido
+- **Avisos de sincronización**: cuando la nube está bloqueada (cuota de Supabase agotada, HTTP 402) los avisos de "operaciones pendientes" y de conflictos se ocultan solos y la barra lateral muestra "Nube: en pausa"; reaparecen en cuanto un sync vuelve a funcionar.
 - **Combos: precio por "Margen s/ costo"**: calcula el precio como costo de los productos + margen %, y muestra costo, ganancia y margen real.
 
 ### Mejorado

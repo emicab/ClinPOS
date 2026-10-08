@@ -24,12 +24,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }),
     ]);
 
+    // Nube bloqueada (HTTP 402 por cuota): la interfaz oculta los avisos de pendientes. Vence a las
+    // 48 h sin nuevos fallos para que los avisos no queden ocultos para siempre.
+    const blockedSetting = await prisma.setting.findUnique({ where: { key: "sync_cloud_blocked_at" } });
+    const blockedAt = blockedSetting?.value ? new Date(blockedSetting.value).getTime() : 0;
+    const cloudBlocked = blockedAt > 0 && Date.now() - blockedAt < 48 * 60 * 60 * 1000;
+
     const isPro =
       planSetting?.value === "pro" ||
       (await prisma.setting.findUnique({ where: { key: "plan_type" } }))?.value === "pro";
 
     res.status(200).json({
       pendingSync,
+      cloudBlocked,
       failedSync,
       openConflicts,
       pendingBreakdown: pendingBreakdown.map((item) => ({

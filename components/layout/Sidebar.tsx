@@ -271,7 +271,18 @@ import { formatSyncBreakdown, useSyncStatus } from "@/hooks/useSyncStatus";
 import { isRouteVisibleForProfile } from "@/lib/moduleCatalog";
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
-  const { online, pendingSync, pendingBreakdown, openConflicts, lastSync } = useSyncStatus();
+  const {
+    online,
+    pendingSync: rawPendingSync,
+    pendingBreakdown,
+    openConflicts: rawOpenConflicts,
+    lastSync,
+    cloudBlocked,
+  } = useSyncStatus();
+  // Con la nube bloqueada (cuota de Supabase agotada) los avisos de pendientes y conflictos no
+  // sirven de nada: se ocultan solos y reaparecen cuando un sync vuelve a funcionar.
+  const pendingSync = cloudBlocked ? 0 : rawPendingSync;
+  const openConflicts = cloudBlocked ? 0 : rawOpenConflicts;
   const {
     isModuleEnabled,
     currentUser,
@@ -739,6 +750,13 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
             {!online ? (
               <span className="text-[10px] font-bold text-foreground-muted bg-muted border border-border px-1.5 py-0.5 rounded-full">
                 sin conexión
+              </span>
+            ) : cloudBlocked ? (
+              <span
+                className="text-[10px] font-bold text-foreground-muted"
+                title="La nube no está disponible por ahora. Tu negocio sigue funcionando con normalidad; los cambios se subirán cuando se restablezca."
+              >
+                en pausa
               </span>
             ) : pendingSync > 0 ? (
               <span

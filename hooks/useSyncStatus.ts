@@ -34,6 +34,7 @@ export function useSyncStatus() {
   const [lastSync, setLastSync] = useState<string>("");
   const [pendingBreakdown, setPendingBreakdown] = useState<SyncBreakdown[]>([]);
   const [openConflicts, setOpenConflicts] = useState<number>(0);
+  const [cloudBlocked, setCloudBlocked] = useState<boolean>(false);
 
   useEffect(() => {
     const isOnline = () =>
@@ -61,6 +62,7 @@ export function useSyncStatus() {
       if (typeof data.lastSync === "string") setLastSync(data.lastSync);
       if (Array.isArray(data.pendingBreakdown)) setPendingBreakdown(data.pendingBreakdown);
       if (typeof data.openConflicts === "number") setOpenConflicts(data.openConflicts);
+      if (typeof data.cloudBlocked === "boolean") setCloudBlocked(data.cloudBlocked);
     } catch {
       // sin red: mantener estado actual
     }
@@ -77,5 +79,5 @@ export function useSyncStatus() {
     };
   }, [refreshStatus]);
 
-  return { online, pendingSync, pendingBreakdown, openConflicts, lastSync, refreshStatus };
+  return { online, pendingSync, pendingBreakdown, openConflicts, lastSync, cloudBlocked, refreshStatus };
 }

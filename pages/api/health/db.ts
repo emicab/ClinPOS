@@ -218,7 +218,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       const rows = (await prisma.$queryRawUnsafe(
         `SELECT MAX(version) as v FROM _app_migrations`
       )) as Array<{ v: number | null }>;
-      appMigrationsMax = rows?.[0]?.v ?? null;
+      // MAX(version) llega como BigInt desde SQLite y JSON.stringify no lo serializa: el endpoint
+      // devolvia ok:false ("Do not know how to serialize a BigInt") y el arranque de la app esperaba
+      // el timeout completo (60 s) antes de mostrar la ventana.
+      const v = rows?.[0]?.v;
+      appMigrationsMax = v === null || v === undefined ? null : Number(v);
     } catch {
       appMigrationsMax = null;
     }

@@ -311,6 +311,16 @@ async function runSupabaseSyncInternal(forceFullSync: boolean = false): Promise<
     if (failed.length > 0) {
       const failedTables = failed.map(f => `${f.table} [HTTP ${f.status}]`).join(", ");
       console.warn(`[Sync] Sincronización parcial: fallaron tablas → ${failedTables}`);
+      // 402 = la nube esta bloqueada (cuota de Supabase agotada): se marca para que la interfaz
+      // oculte los avisos de "pendientes de sincronizar" hasta que un sync vuelva a funcionar.
+      if (failed.some(f => f.status === 402)) {
+        const now = new Date().toISOString();
+        await prisma.setting.upsert({
+          where: { key: "sync_cloud_blocked_at" },
+          update: { value: now },
+          create: { key: "sync_cloud_blocked_at", value: now },
+        });
+      }
       // 401/403 = credencial inválida/rotada: no tiene sentido reintentar cada
       // 5 min. Se activa el enfriamiento de 30 min (ver inicio de la función).
       if (failed.some(f => f.status === 401 || f.status === 403)) {
@@ -360,8 +370,9 @@ async function runSupabaseSyncInternal(forceFullSync: boolean = false): Promise<
       update: { value: syncTimeString },
       create: { key: "supabase_last_sync", value: syncTimeString }
     });
-    // El sync completo funcionó: levantar cualquier enfriamiento de auth previo.
-    await prisma.setting.deleteMany({ where: { key: "sync_auth_cooldown_until" } });
+    // El sync completo funcionó: levantar cualquier enfriamiento de auth previo y el aviso de
+    // nube bloqueada (los avisos de pendientes vuelven a mostrarse).
+    await prisma.setting.deleteMany({ where: { key: { in: ["sync_auth_cooldown_until", "sync_cloud_blocked_at"] } } });
 
     // Cursor por dominio: queda actualizado solo cuando todo el ciclo y el
     // outbox terminaron correctamente. El watermark global se conserva para

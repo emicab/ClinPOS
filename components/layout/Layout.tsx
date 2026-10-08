@@ -42,7 +42,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     hasRolePermission,
     plan,
   } = useModules();
-  const { online, pendingSync, pendingBreakdown } = useSyncStatus();
+  const { online, pendingSync, pendingBreakdown, cloudBlocked } = useSyncStatus();
   const pathname = usePathname() || "";
   // Backoff de sync: ante fallos repetidos se espacian los intentos
   // (2^n min, tope 30) en vez de quemar egress cada 5 min en loop.
@@ -197,7 +197,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
               computadora y se sincronizarán automáticamente cuando vuelva la conexión.
             </div>
           )}
-          {isSyncEnabled && online && pendingSync > 0 && (
+          {isSyncEnabled && online && pendingSync > 0 && !cloudBlocked && (
             <div className="mb-4 flex items-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-4 py-2.5 text-sm font-semibold text-blue-600">
               <CloudOff size={16} className="shrink-0" />
               {pendingSync} operación{pendingSync !== 1 ? "es" : ""} pendiente
