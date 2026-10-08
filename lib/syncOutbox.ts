@@ -167,12 +167,18 @@ async function markDone(id: number): Promise<void> {
   });
 }
 
-async function markFailed(id: number, error: string, retryable: boolean, maxAttempts = 5): Promise<void> {
+async function markFailed(
+  id: number,
+  error: string,
+  retryable: boolean,
+  maxAttempts = 5,
+  keepAttempts = false,
+): Promise<void> {
   const record = await prisma.syncOutbox.findUnique({ where: { id }, select: { attempts: true } });
-  const attempts = (record?.attempts || 0) + 1;
+  const attempts = (record?.attempts || 0) + (keepAttempts ? 0 : 1);
   const shouldRetry = retryable && attempts < maxAttempts;
   const nextAttemptAt = shouldRetry
-    ? new Date(Date.now() + Math.min(15 * 60_000, 5_000 * 2 ** Math.max(0, attempts - 1)))
+    ? new Date(Date.now() + Math.min(15 * 60_000, 5_000 * 2 ** Math.min(20, Math.max(0, attempts - 1))))
     : null;
   await prisma.syncOutbox.update({
     where: { id },
@@ -370,13 +376,18 @@ export async function drainOutbox(limit = 1000): Promise<{ drained: number; rema
         // Un rechazo de la operación no implica necesariamente falta de red.
         // Se marca como FAILED y se continúa con el resto de la cola para que
         // un registro inválido no bloquee cientos de operaciones correctas.
-        await markFailed(record.id, "Operación rechazada por la nube o dato inexistente", false);
+        // Reintentable (backoff y hasta 5 intentos): una caida de la nube (cuota, 5xx) tambien
+        // llega aca como "false" y antes quedaba FAILED para siempre sin reenviarse.
+        await markFailed(record.id, "Operación rechazada por la nube o dato inexistente", true);
         continue;
       }
     } catch (err: any) {
       const msg = err?.message || String(err);
       const isNetwork = /fetch|network|ECONN|abort|timeout|ENOTFOUND/i.test(msg);
-      await markFailed(record.id, msg, isNetwork);
+      // Un error de red NO consume intentos: sin conexion no es culpa de la operacion. Antes
+      // 5 caidas seguidas (~1 min de backoff) la dejaban FAILED y una caida de horas
+      // degradaba toda la cola sin posibilidad de recuperarse.
+      await markFailed(record.id, msg, isNetwork, isNetwork ? Number.MAX_SAFE_INTEGER : 5, isNetwork);
       if (isNetwork) {
         networkError = true;
         break;
@@ -384,6 +395,49 @@ export async function drainOutbox(limit = 1000): Promise<{ drained: number; rema
     }
   }
 
+  await purgeDoneOutbox();
+  await reviveFailedOutbox();
+
   const remaining = await getPendingCount();
   return { drained, remaining, networkError };
+}
+
+// Las operaciones DONE no se borraban nunca: la tabla crecia sin limite (un POS con
+// miles de ventas/productos acumula millones de filas). Se conservan 7 dias como
+// traza y se purgan como maximo una vez por hora.
+const OUTBOX_DONE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+let lastOutboxPurge = 0;
+
+// Operaciones FAILED (agotaron intentos) vuelven a PENDING cada 6 h para que se entreguen
+// cuando la nube se recupere; las realmente invalidas solo repiten un ciclo acotado.
+const OUTBOX_FAILED_REVIVE_MS = 6 * 60 * 60 * 1000;
+let lastFailedRevive = 0;
+
+async function reviveFailedOutbox(): Promise<void> {
+  const now = Date.now();
+  if (now - lastFailedRevive < 60 * 60 * 1000) return;
+  lastFailedRevive = now;
+  try {
+    const res = await prisma.syncOutbox.updateMany({
+      where: { status: "FAILED", lastAttemptAt: { lt: new Date(now - OUTBOX_FAILED_REVIVE_MS) } },
+      data: { status: "PENDING", attempts: 0, nextAttemptAt: null, lockedAt: null, updatedAt: new Date() },
+    });
+    if (res.count > 0) console.log(`[Outbox] ${res.count} operaciones FAILED se reintentarán.`);
+  } catch (err) {
+    console.error("[Outbox] No se pudo revivir operaciones FAILED:", err);
+  }
+}
+
+async function purgeDoneOutbox(): Promise<void> {
+  const now = Date.now();
+  if (now - lastOutboxPurge < 60 * 60 * 1000) return;
+  lastOutboxPurge = now;
+  try {
+    const res = await prisma.syncOutbox.deleteMany({
+      where: { status: "DONE", updatedAt: { lt: new Date(now - OUTBOX_DONE_RETENTION_MS) } },
+    });
+    if (res.count > 0) console.log(`[Outbox] Purgadas ${res.count} operaciones DONE antiguas.`);
+  } catch (err) {
+    console.error("[Outbox] No se pudo purgar el outbox:", err);
+  }
 }

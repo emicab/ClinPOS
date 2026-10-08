@@ -16,6 +16,11 @@ Todos los cambios notables realizados en el proyecto están detallados a continu
 - **Acciones masivas "todas las páginas"** (precios, proveedor, publicar en web, borrar) usan el mismo criterio que la lista (búsqueda sin tildes, sin ingredientes ocultos).
 - **Traspasos de stock**: dos respuestas simultáneas ya no acreditan el stock dos veces.
 - Cobros de cuenta corriente y gastos validan que el monto sea numérico.
+- **Sincronización**: ante una caída de la nube, la cola de pendientes ya no se degrada a "fallida" para siempre (los errores de red no consumen intentos y las operaciones fallidas se reintentan cada 6 h); las operaciones ya enviadas se purgan a los 7 días (la tabla crecía sin límite).
+- **Recetario**: el stock disponible de un elaborado se calcula sin errores de redondeo (0,3 / 0,1 daba 2) y el descuento de ingredientes falla si el stock cambió durante la venta.
+- **Facturación ARCA**: el certificado y la clave privada ya no se guardan descifrados en disco; el cliente sin documento va como Consumidor Final y el IVA cuadra siempre con el total.
+- **Promociones**: el descuento nunca supera el subtotal. **Analíticas y dashboard** cuentan solo ventas cobradas (pendientes y canceladas inflaban ingresos).
+- **Licencias**: la validación y activación usan funciones de la nube (la tabla ya no es pública). Los equipos sin actualizar quedan en modo "sin conexión" y conservan su plan.
 
 ### Añadido
 - **Combos: precio por "Margen s/ costo"**: calcula el precio como costo de los productos + margen %, y muestra costo, ganancia y margen real.
