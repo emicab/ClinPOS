@@ -100,7 +100,7 @@ export default async function handler(
     if (!description || amount === undefined || !category || !paymentType) {
       return res.status(400).json({ message: 'Faltan datos obligatorios: descripción, monto, categoría o tipo de pago.' });
     }
-    if (amount <= 0) {
+    if (!Number.isFinite(Number(amount)) || Number(amount) <= 0) {
         return res.status(400).json({ message: 'El monto debe ser mayor a cero.' });
     }
     if (!Object.values(PaymentType).includes(paymentType)) {

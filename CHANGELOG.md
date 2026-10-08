@@ -2,6 +2,33 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.18.0] - 2026-10-07
+
+### Importante al actualizar
+- **Hay que volver a cargar las claves guardadas en el POS** (certificado y clave de ARCA, API key de Gemini, credenciales de Cloudinary): antes el secreto de cifrado se regeneraba en cada arranque y esos datos no se podían leer. Desde esta versión el secreto queda guardado de forma permanente en el Almacén de credenciales de Windows.
+
+### Corregido
+- **Combos con stock 0 en Nueva Venta**: el POS recibía los combos sin stock de sus productos y los mostraba agotados. Ahora respeta la sucursal y el stock derivado de recetas.
+- **"Cargar stock" y el importador CSV** actualizaban solo el stock global y no el de la sucursal (la pantalla de venta seguía mostrando el valor viejo). Ahora cargan la sucursal del equipo y recalculan el total; además conservan decimales (kg/L) y encolan el sync.
+- **Compras, consignaciones y edición de producto**: el stock por sucursal quedaba desfasado del global al editar/borrar una compra recibida, entregar/devolver consignaciones o guardar un producto sin sucursal.
+- **Cierre de caja**: el esperado ahora es solo efectivo (saldo inicial + movimientos en efectivo); sumaba tarjeta, transferencia y Mercado Pago, y la diferencia nunca cerraba.
+- **Borrar una venta**: ya no repone stock de pedidos pendientes ni descuenta de la cuenta corriente ventas que no fueron en cuenta.
+- **Acciones masivas "todas las páginas"** (precios, proveedor, publicar en web, borrar) usan el mismo criterio que la lista (búsqueda sin tildes, sin ingredientes ocultos).
+- **Traspasos de stock**: dos respuestas simultáneas ya no acreditan el stock dos veces.
+- Cobros de cuenta corriente y gastos validan que el monto sea numérico.
+
+### Añadido
+- **Combos: precio por "Margen s/ costo"**: calcula el precio como costo de los productos + margen %, y muestra costo, ganancia y margen real.
+
+### Mejorado
+- **Base de datos**: 33 índices nuevos (ventas, productos, pedidos web, movimientos), modo WAL y migraciones aplicadas a todos los negocios (antes solo la base principal). Ninguna migración modifica ni borra datos; se respalda antes de migrar.
+- **Backup y restauración seguros**: la copia usa una instantánea consistente de la base del negocio activo; restaurar valida el archivo y se aplica al reiniciar, guardando antes una copia de los datos actuales.
+- **Crear un negocio nuevo** clona la base con una copia consistente.
+- **Nueva Venta más rápida**: menos consultas por ítem al registrar la venta.
+- Registro de diagnóstico (`clinpos-app.log`) y `server.log` conservando los 3 arranques anteriores.
+- **Seguridad**: bloqueo temporal tras intentos fallidos de PIN; CORS sin comodín en la API local.
+- Se eliminó código sin uso (hooks, gráficos y componentes de venta duplicados).
+
 ## [1.17.6] - 2026-09-29
 
 ### Corregido

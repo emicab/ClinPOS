@@ -2102,7 +2102,10 @@ mod tests {
     #[test]
     #[ignore]
     fn migrates_real_copy() {
-        let src = std::env::var("CLINPOS_TEST_DB").expect("definir CLINPOS_TEST_DB");
+        let Ok(src) = std::env::var("CLINPOS_TEST_DB") else {
+            println!("omitido: definir CLINPOS_TEST_DB con la ruta de una COPIA de una base real");
+            return;
+        };
         let dir = scratch_dir("realcopy");
         let db = dir.join("copy.db");
         fs::copy(&src, &db).unwrap();
