@@ -1,8 +1,8 @@
 use std::fs::{self, File};
 use std::os::windows::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use tauri::{Manager, State};
 use keyring::Entry;
 use rand::Rng;
@@ -10,6 +10,74 @@ use rusqlite::Connection;
 use serde::Serialize;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+// ── Log de la app ──────────────────────────────────────────────────────
+// En release la app corre con windows_subsystem = "windows": stdout/stderr no
+// van a ningún lado. Este log a archivo deja rastro de migraciones, keyring y
+// arranque. Rota al superar 1 MB conservando el anterior (.1).
+static APP_LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+const APP_LOG_MAX_BYTES: u64 = 1_048_576;
+
+fn app_log(msg: &str) {
+    eprintln!("{}", msg);
+    if let Some(path) = APP_LOG_PATH.get() {
+        if fs::metadata(path).map(|m| m.len() > APP_LOG_MAX_BYTES).unwrap_or(false) {
+            let _ = fs::rename(path, path.with_extension("log.1"));
+        }
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write;
+            let _ = writeln!(f, "[{}] {}", chrono::Local::now().format("%Y-%m-%d %H:%M:%S"), msg);
+        }
+    }
+}
+
+macro_rules! log_line {
+    ($($arg:tt)*) => { app_log(&format!($($arg)*)) };
+}
+
+/// Rota `base` → `base.1` → `base.2`… conservando `keep` copias previas, para
+/// no perder el log del arranque anterior (justo el que sirve tras un crash).
+fn rotate_log_file(base: &Path, keep: usize) {
+    if !base.exists() {
+        return;
+    }
+    let numbered = |n: usize| -> PathBuf {
+        let mut name = base.as_os_str().to_os_string();
+        name.push(format!(".{}", n));
+        PathBuf::from(name)
+    };
+    let _ = fs::remove_file(numbered(keep));
+    for n in (1..keep).rev() {
+        let from = numbered(n);
+        if from.exists() {
+            let _ = fs::rename(&from, numbered(n + 1));
+        }
+    }
+    let _ = fs::rename(base, numbered(1));
+}
+
+/// Conserva solo los `keep` archivos más recientes de `dir` cuyo nombre
+/// contiene `marker` y termina en `.bak`.
+fn prune_backups(dir: &Path, marker: &str, keep: usize) {
+    let mut baks: Vec<PathBuf> = fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.extension().map(|x| x == "bak").unwrap_or(false)
+                        && p.file_name()
+                            .map(|n| n.to_string_lossy().contains(marker))
+                            .unwrap_or(false)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    baks.sort();
+    while baks.len() > keep {
+        let old = baks.remove(0);
+        let _ = fs::remove_file(&old);
+    }
+}
 
 // ── Auto-migration system ──────────────────────────────────────────────
 struct Migration {
@@ -800,15 +868,15 @@ fn ensure_expected_columns(conn: &Connection) {
     for (table, column, def) in EXPECTED_COLUMNS {
         let stmt = format!(r#"ALTER TABLE "{}" ADD COLUMN "{}" {}"#, table, column, def);
         match conn.execute(&stmt, []) {
-            Ok(_) => println!("[Migrations] ensure: added {}.{}", table, column),
+            Ok(_) => log_line!("[Migrations] ensure: added {}.{}", table, column),
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("duplicate column") || msg.contains("already exists") {
                     // ya existe: estado deseado alcanzado
                 } else if msg.contains("no such table") {
-                    eprintln!("[Migrations] ensure: table {} missing, skipping {}.{} ({})", table, table, column, e);
+                    log_line!("[Migrations] ensure: table {} missing, skipping {}.{} ({})", table, table, column, e);
                 } else {
-                    eprintln!("[Migrations] ensure error on {}.{}: {}", table, column, e);
+                    log_line!("[Migrations] ensure error on {}.{}: {}", table, column, e);
                 }
             }
         }
@@ -869,7 +937,7 @@ fn ensure_sync_protocol_tables(conn: &Connection) {
     ];
     for statement in statements {
         if let Err(error) = conn.execute(statement, []) {
-            eprintln!("[Migrations] sync schema repair error: {}", error);
+            log_line!("[Migrations] sync schema repair error: {}", error);
         }
     }
 }
@@ -878,7 +946,7 @@ fn run_migrations(db_path: &Path) {
     let conn = match Connection::open(db_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("[Migrations] Failed to open database: {}", e);
+            log_line!("[Migrations] Failed to open database: {}", e);
             return;
         }
     };
@@ -891,7 +959,7 @@ fn run_migrations(db_path: &Path) {
             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
         )"
     ) {
-        eprintln!("[Migrations] Failed to create tracking table: {}", e);
+        log_line!("[Migrations] Failed to create tracking table: {}", e);
         return;
     }
 
@@ -908,36 +976,15 @@ fn run_migrations(db_path: &Path) {
     if needs_backup && db_path.exists() {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         let bak = db_path.with_extension(format!("db.{}.bak", stamp));
-        match fs::copy(db_path, &bak) {
+        match vacuum_into(&conn, &bak) {
             Ok(_) => {
-                println!("[Migrations] Backup pre-migración: {}", bak.display());
+                log_line!("[Migrations] Backup pre-migración: {}", bak.display());
                 // Podar backups viejos, conservar los 3 más recientes.
                 if let Some(parent) = db_path.parent() {
-                    let mut baks: Vec<_> = fs::read_dir(parent)
-                        .map(|rd| {
-                            rd.filter_map(|e| e.ok())
-                                .map(|e| e.path())
-                                .filter(|p| {
-                                    p.extension().map(|x| x == "bak").unwrap_or(false)
-                                        && p.file_stem()
-                                            .map(|s| s.to_string_lossy().contains("crm_prod.db."))
-                                            .unwrap_or(false)
-                                })
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    baks.sort();
-                    while baks.len() > 3 {
-                        if let Some(old) = baks.first().cloned() {
-                            let _ = fs::remove_file(&old);
-                            baks.remove(0);
-                        } else {
-                            break;
-                        }
-                    }
+                    prune_backups(parent, "crm_prod.db.", 3);
                 }
             }
-            Err(e) => eprintln!("[Migrations] No se pudo crear backup: {}", e),
+            Err(e) => log_line!("[Migrations] No se pudo crear backup: {}", e),
         }
     }
 
@@ -954,7 +1001,7 @@ fn run_migrations(db_path: &Path) {
             continue;
         }
 
-        println!("[Migrations] Applying v{}: {} ...", migration.version, migration.name);
+        log_line!("[Migrations] Applying v{}: {} ...", migration.version, migration.name);
 
         let mut has_error = false;
         for statement in migration.sql.split(';') {
@@ -965,9 +1012,9 @@ fn run_migrations(db_path: &Path) {
             if let Err(e) = conn.execute(stmt, []) {
                 let err_msg = e.to_string();
                 if err_msg.contains("duplicate column") || err_msg.contains("already exists") {
-                    println!("[Migrations] Statement already applied: {}", err_msg);
+                    log_line!("[Migrations] Statement already applied: {}", err_msg);
                 } else {
-                    eprintln!("[Migrations] Error executing statement ({}): {}", stmt, e);
+                    log_line!("[Migrations] Error executing statement ({}): {}", stmt, e);
                     has_error = true;
                 }
             }
@@ -978,7 +1025,7 @@ fn run_migrations(db_path: &Path) {
                 "INSERT INTO _app_migrations (version, name) VALUES (?1, ?2)",
                 rusqlite::params![migration.version, migration.name],
             );
-            println!("[Migrations] ✓ v{} applied successfully", migration.version);
+            log_line!("[Migrations] ✓ v{} applied successfully", migration.version);
         }
     }
 
@@ -1016,13 +1063,149 @@ struct SaveFileResult {
     canceled: bool,
 }
 
-fn get_db_path(app_handle: &tauri::AppHandle) -> std::path::PathBuf {
+fn get_db_path(app_handle: &tauri::AppHandle) -> PathBuf {
     app_handle.path().app_data_dir().unwrap_or_else(|_| std::env::temp_dir()).join("crm_prod.db")
+}
+
+/// Base del negocio activo. `store.json` (junto a la DB principal) guarda los
+/// perfiles; si el activo apunta a otro archivo que `crm_prod.db`, el backup y
+/// la restauración deben operar sobre ese archivo y no sobre la base default.
+fn active_db_path(app_handle: &tauri::AppHandle) -> PathBuf {
+    let default = get_db_path(app_handle);
+    let dir = match default.parent() {
+        Some(d) => d.to_path_buf(),
+        None => return default,
+    };
+    let raw = match fs::read_to_string(dir.join("store.json")) {
+        Ok(r) => r,
+        Err(_) => return default,
+    };
+    let store: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(_) => return default,
+    };
+    let active_id = match store.get("activeProfileId").and_then(|v| v.as_str()) {
+        Some(id) => id,
+        None => return default,
+    };
+    let db_file = store
+        .get("profiles")
+        .and_then(|p| p.as_array())
+        .and_then(|profiles| {
+            profiles
+                .iter()
+                .find(|p| p.get("id").and_then(|v| v.as_str()) == Some(active_id))
+        })
+        .and_then(|p| p.get("dbFile").and_then(|v| v.as_str()));
+    if let Some(file) = db_file {
+        let candidate = Path::new(file);
+        let path = if candidate.is_absolute() { candidate.to_path_buf() } else { dir.join(candidate) };
+        if path.exists() {
+            return path;
+        }
+    }
+    default
+}
+
+/// Copia consistente de la base con `VACUUM INTO`: genera un archivo SQLite
+/// autocontenido (sin -wal/-shm pendientes) aunque otro proceso esté
+/// escribiendo. Un `fs::copy` del archivo en vivo puede salir corrupto.
+fn vacuum_into(conn: &Connection, dest: &Path) -> rusqlite::Result<()> {
+    if dest.exists() {
+        fs::remove_file(dest).map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+    }
+    let _ = conn.busy_timeout(std::time::Duration::from_secs(10));
+    let escaped = dest.to_string_lossy().replace('\'', "''");
+    conn.execute_batch(&format!("VACUUM INTO '{}'", escaped))
+}
+
+fn pending_restore_path(target: &Path) -> PathBuf {
+    let mut name = target.as_os_str().to_os_string();
+    name.push(".restore_pending");
+    PathBuf::from(name)
+}
+
+/// Valida que `source` sea una base ClinPOS sana y deja una copia limpia en
+/// `pending`. No toca la base activa: la restauración se aplica al reiniciar.
+fn stage_restore(source: &Path, pending: &Path) -> Result<(), String> {
+    let conn = Connection::open_with_flags(source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|e| format!("No se pudo abrir el archivo como base SQLite: {}", e))?;
+
+    let check: String = conn
+        .query_row("PRAGMA quick_check", [], |r| r.get(0))
+        .map_err(|e| format!("El archivo no es una base SQLite válida: {}", e))?;
+    if check != "ok" {
+        return Err(format!("El archivo está dañado (quick_check: {}).", check));
+    }
+
+    for table in ["Product", "Sale", "Setting"] {
+        let exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name = ?1",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap_or(false);
+        if !exists {
+            return Err(format!("El archivo no parece una copia de ClinPOS (falta la tabla {}).", table));
+        }
+    }
+
+    vacuum_into(&conn, pending).map_err(|e| {
+        let _ = fs::remove_file(pending);
+        format!("No se pudo preparar la restauración: {}", e)
+    })
+}
+
+/// Aplica restauraciones pendientes. Corre al iniciar, ANTES de levantar node,
+/// cuando nadie tiene la base abierta. Guarda antes una copia de la base actual
+/// y descarta los -wal/-shm viejos para que no se mezclen con la restaurada.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn apply_pending_restores(data_dir: &Path) {
+    let entries = match fs::read_dir(data_dir) {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let pending = entry.path();
+        let file_name = pending.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let target_name = match file_name.strip_suffix(".restore_pending") {
+            Some(n) if !n.is_empty() => n.to_string(),
+            _ => continue,
+        };
+        let target = data_dir.join(&target_name);
+
+        if target.exists() {
+            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+            let safety = data_dir.join(format!("{}.pre-restore-{}.bak", target_name, stamp));
+            let saved = Connection::open(&target)
+                .and_then(|c| vacuum_into(&c, &safety))
+                .is_ok()
+                || fs::copy(&target, &safety).is_ok();
+            if !saved {
+                log_line!("[Restore] No se pudo respaldar {}; se cancela la restauración.", target_name);
+                let _ = fs::remove_file(&pending);
+                continue;
+            }
+            prune_backups(data_dir, &format!("{}.pre-restore-", target_name), 3);
+        }
+
+        for suffix in ["-wal", "-shm", "-journal"] {
+            let mut sidecar = target.as_os_str().to_os_string();
+            sidecar.push(suffix);
+            let _ = fs::remove_file(PathBuf::from(sidecar));
+        }
+
+        match fs::rename(&pending, &target) {
+            Ok(_) => log_line!("[Restore] Base {} restaurada desde la copia seleccionada.", target_name),
+            Err(e) => log_line!("[Restore] No se pudo aplicar la restauración de {}: {}", target_name, e),
+        }
+    }
 }
 
 #[tauri::command]
 async fn backup_database(app_handle: tauri::AppHandle) -> Result<BackupResult, String> {
-    let db_path = get_db_path(&app_handle);
+    let db_path = active_db_path(&app_handle);
     if !db_path.exists() {
         return Ok(BackupResult { success: false, path: None, error: Some("Base de datos no encontrada.".into()), canceled: false });
     }
@@ -1036,19 +1219,29 @@ async fn backup_database(app_handle: tauri::AppHandle) -> Result<BackupResult, S
 
     match file_path {
         Some(path) => {
-            let path_str = path.into_path().unwrap();
-            match fs::copy(&db_path, &path_str) {
+            let path_str = match path.into_path() {
+                Ok(p) => p,
+                Err(e) => return Ok(BackupResult { success: false, path: None, error: Some(format!("Ruta inválida: {}", e)), canceled: false }),
+            };
+            let result = Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .and_then(|conn| vacuum_into(&conn, &path_str));
+            match result {
                 Ok(_) => Ok(BackupResult { success: true, path: Some(path_str.to_string_lossy().into_owned()), error: None, canceled: false }),
-                Err(e) => Ok(BackupResult { success: false, path: None, error: Some(e.to_string()), canceled: false }),
+                Err(e) => {
+                    log_line!("[Backup] Error al exportar copia: {}", e);
+                    Ok(BackupResult { success: false, path: None, error: Some(e.to_string()), canceled: false })
+                }
             }
         },
         None => Ok(BackupResult { success: false, path: None, error: None, canceled: true }),
     }
 }
 
+/// No pisa la base en uso: valida la copia elegida y la deja "pendiente"; se
+/// aplica al próximo arranque (ver `apply_pending_restores`).
 #[tauri::command]
 async fn restore_database(app_handle: tauri::AppHandle) -> Result<RestoreResult, String> {
-    let db_path = get_db_path(&app_handle);
+    let target = active_db_path(&app_handle);
 
     use tauri_plugin_dialog::DialogExt;
     let file_path = app_handle.dialog()
@@ -1058,27 +1251,28 @@ async fn restore_database(app_handle: tauri::AppHandle) -> Result<RestoreResult,
 
     match file_path {
         Some(path) => {
-            let source_path = path.into_path().unwrap();
-            let mut temp_backup = db_path.clone();
-            temp_backup.set_extension("db.backup_temp");
-            
-            if db_path.exists() {
-                let _ = fs::copy(&db_path, &temp_backup);
+            let source_path = match path.into_path() {
+                Ok(p) => p,
+                Err(e) => return Ok(RestoreResult { success: false, message: None, error: Some(format!("Ruta inválida: {}", e)), canceled: false }),
+            };
+            let same_file = match (fs::canonicalize(&source_path), fs::canonicalize(&target)) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            };
+            if same_file {
+                return Ok(RestoreResult { success: false, message: None, error: Some("Elegiste la base que está en uso. Seleccioná un archivo de copia de seguridad.".into()), canceled: false });
             }
-            
-            match fs::copy(&source_path, &db_path) {
-                Ok(_) => {
-                    if temp_backup.exists() {
-                        let _ = fs::remove_file(&temp_backup);
-                    }
-                    Ok(RestoreResult { success: true, message: Some("Base de datos restaurada. Se recomienda reiniciar la aplicación.".into()), error: None, canceled: false })
-                },
+
+            match stage_restore(&source_path, &pending_restore_path(&target)) {
+                Ok(_) => Ok(RestoreResult {
+                    success: true,
+                    message: Some("Copia validada. Se aplicará al reiniciar ClinPOS (antes se guarda una copia de los datos actuales).".into()),
+                    error: None,
+                    canceled: false,
+                }),
                 Err(e) => {
-                    if temp_backup.exists() {
-                        let _ = fs::copy(&temp_backup, &db_path);
-                        let _ = fs::remove_file(&temp_backup);
-                    }
-                    Ok(RestoreResult { success: false, message: None, error: Some(e.to_string()), canceled: false })
+                    log_line!("[Restore] Copia rechazada: {}", e);
+                    Ok(RestoreResult { success: false, message: None, error: Some(e), canceled: false })
                 }
             }
         },
@@ -1105,7 +1299,10 @@ async fn save_report_file(
 
     match file_path {
         Some(path) => {
-            let path_str = path.into_path().unwrap();
+            let path_str = match path.into_path() {
+                Ok(p) => p,
+                Err(e) => return Ok(SaveFileResult { success: false, path: None, error: Some(format!("Ruta inválida: {}", e)), canceled: false }),
+            };
             match B64.decode(&content_b64) {
                 Ok(bytes) => match fs::write(&path_str, &bytes) {
                     Ok(_) => Ok(SaveFileResult {
@@ -1145,9 +1342,7 @@ fn wait_for_db_health(port: u16) -> bool {
     use std::io::{Read, Write};
     use std::time::Duration;
 
-    let addr: std::net::SocketAddr = format!("127.0.0.1:{}", port)
-        .parse()
-        .unwrap_or_else(|_| "127.0.0.1:3001".parse().unwrap());
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
     for _ in 0..240 {
         if let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
             let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
@@ -1265,7 +1460,7 @@ fn find_stale_node_pids(needle: &str) -> Vec<u32> {
 fn kill_pids(pids: &[u32], tag: &str) -> usize {
     let mut ok = 0;
     for pid in pids {
-        println!("[{}] Matando node huérfano (pid {})", tag, pid);
+        log_line!("[{}] Matando node huérfano (pid {})", tag, pid);
         let status = Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .creation_flags(CREATE_NO_WINDOW)
@@ -1350,6 +1545,67 @@ async fn exit_for_update(
     app_handle.exit(0);
     Ok(())
 }
+/// Secreto de cifrado persistente guardado en el Credential Manager de Windows.
+///
+/// Reglas para no perder datos cifrados (claves ARCA, API keys en Setting):
+/// - Solo se genera un secreto nuevo si NO existe entrada (`NoEntry`); un error
+///   transitorio de lectura nunca sobrescribe el secreto existente.
+/// - Tras guardarlo se relee para comprobar que realmente persistió.
+/// - Si el almacén no está disponible se devuelve "" (clave derivada solo del
+///   equipo y usuario): es estable entre arranques, a diferencia de un secreto
+///   aleatorio que se perdería al cerrar la app.
+#[cfg_attr(debug_assertions, allow(dead_code))]
+fn load_or_create_encryption_secret() -> String {
+    const SERVICE: &str = "com.emidev.clinpos";
+    const USER: &str = "clinpos_encryption_secret";
+
+    let entry = match Entry::new(SERVICE, USER) {
+        Ok(e) => e,
+        Err(e) => {
+            log_line!("[Keyring] Almacén de credenciales inaccesible ({}). Se usa la clave derivada del equipo.", e);
+            return String::new();
+        }
+    };
+
+    for attempt in 1..=3 {
+        match entry.get_password() {
+            Ok(secret) if !secret.is_empty() => return secret,
+            Ok(_) | Err(keyring::Error::NoEntry) => break,
+            Err(e) => {
+                log_line!("[Keyring] Lectura fallida (intento {}/3): {}", attempt, e);
+                if attempt == 3 {
+                    log_line!("[Keyring] Se conserva el secreto existente sin sobrescribir; esta sesión usa la clave derivada del equipo.");
+                    return String::new();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+        }
+    }
+
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+    let mut rng = rand::thread_rng();
+    let new_secret: String = (0..64)
+        .map(|_| CHARSET[rng.gen_range(0..CHARSET.len())] as char)
+        .collect();
+
+    match entry.set_password(&new_secret) {
+        Ok(_) => match entry.get_password() {
+            Ok(stored) if stored == new_secret => {
+                log_line!("[Keyring] Secreto de cifrado creado y verificado.");
+                new_secret
+            }
+            _ => {
+                log_line!("[Keyring] El secreto no persistió tras guardarlo; se usa la clave derivada del equipo.");
+                String::new()
+            }
+        },
+        Err(e) => {
+            log_line!("[Keyring] No se pudo guardar el secreto ({}); se usa la clave derivada del equipo.", e);
+            String::new()
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -1368,6 +1624,11 @@ pub fn run() {
     .manage(ServerState(Mutex::new(None)))
     .invoke_handler(tauri::generate_handler![backup_database, restore_database, kill_server, kill_stale_node_servers, exit_for_update, save_report_file])
     .setup(|app| {
+      if let Ok(dir) = app.path().app_data_dir() {
+        let _ = fs::create_dir_all(&dir);
+        let _ = APP_LOG_PATH.set(dir.join("clinpos-app.log"));
+      }
+
       #[cfg(debug_assertions)]
       {
         let _ = app.handle().plugin(
@@ -1385,6 +1646,10 @@ pub fn run() {
         });
 
         let _ = fs::create_dir_all(&app_data_dir);
+
+        // Aplica restauraciones elegidas en la sesión anterior, antes de que
+        // nadie abra la base (ver restore_database).
+        apply_pending_restores(&app_data_dir);
 
         let target_db = app_data_dir.join("crm_prod.db");
         let template_db = if resource_dir.join("_up_").join("prisma").join("crm_template.db").exists() {
@@ -1407,27 +1672,7 @@ pub fn run() {
         let server_js = standalone_dir.join("server.js");
         let local_node = standalone_dir.join("node.exe");
 
-        // KEYRING LOGIC: Get or create secure encryption secret
-        let service = "com.emidev.clinpos";
-        let user = "clinpos_encryption_secret";
-        let entry = Entry::new(service, user).expect("Failed to access keyring");
-        let encryption_secret = match entry.get_password() {
-            Ok(secret) => secret,
-            Err(_) => {
-                // Generate a new 64-char random secret
-                const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
-                let mut rng = rand::thread_rng();
-                let new_secret: String = (0..64)
-                    .map(|_| {
-                        let idx = rng.gen_range(0..CHARSET.len());
-                        CHARSET[idx] as char
-                    })
-                    .collect();
-                
-                let _ = entry.set_password(&new_secret);
-                new_secret
-            }
-        };
+        let encryption_secret = load_or_create_encryption_secret();
 
         // Generate a random APP_SECRET to protect the local server from browser access
         let app_secret: String = {
@@ -1446,9 +1691,19 @@ pub fn run() {
             "node".to_string()
           };
 
+          // Conserva los logs de los 3 arranques anteriores: tras un crash el
+          // que sirve es el de la sesión previa, no uno recién truncado.
           let log_file_path = app_data_dir.join("server.log");
-          let log_file = File::create(&log_file_path).expect("failed to create log file");
-          let err_file = log_file.try_clone().expect("failed to clone log file");
+          rotate_log_file(&log_file_path, 3);
+          let (server_stdout, server_stderr) = match File::create(&log_file_path)
+            .and_then(|f| f.try_clone().map(|c| (f, c)))
+          {
+            Ok((out, err)) => (Stdio::from(out), Stdio::from(err)),
+            Err(e) => {
+              log_line!("[Startup] No se pudo crear server.log: {}", e);
+              (Stdio::null(), Stdio::null())
+            }
+          };
 
           let node_bin_clean = node_bin.replace("\\\\?\\", "");
           let server_js_clean = server_js.to_string_lossy().replace("\\\\?\\", "");
@@ -1465,16 +1720,21 @@ pub fn run() {
           cmd.env("APP_SECRET", &app_secret);
 
           cmd.creation_flags(CREATE_NO_WINDOW);
-          cmd.stdout(Stdio::from(log_file));
-          cmd.stderr(Stdio::from(err_file));
+          cmd.stdout(server_stdout);
+          cmd.stderr(server_stderr);
 
-          if let Ok(child) = cmd.spawn() {
-            // Garantía del SO: si la app muere, node muere con ella.
-            assign_to_job_object(&child);
-            if let Ok(mut state) = app.state::<ServerState>().0.lock() {
-              *state = Some(child);
+          match cmd.spawn() {
+            Ok(child) => {
+              // Garantía del SO: si la app muere, node muere con ella.
+              assign_to_job_object(&child);
+              if let Ok(mut state) = app.state::<ServerState>().0.lock() {
+                *state = Some(child);
+              }
             }
+            Err(e) => log_line!("[Startup] No se pudo iniciar el servidor local: {}", e),
           }
+        } else {
+          log_line!("[Startup] No se encontró server.js en {}", standalone_dir.display());
         }
 
           // Store app_secret for the webview navigation
@@ -1496,21 +1756,23 @@ pub fn run() {
               std::thread::sleep(std::time::Duration::from_millis(250));
             }
             if !tcp_ok {
-              eprintln!("[Startup] server TCP never came up on port {}", port);
+              log_line!("[Startup] server TCP never came up on port {}", port);
             }
 
             // 2) Gate de salud de DB: no navegar hasta que /api/health/db diga ok.
             //    Nunca bloquea más de ~60s: si el backend no sana, se navega igual
             //    y el error queda visible en server.log + health endpoint.
             if wait_for_db_health(port) {
-              println!("[Startup] DB health ok, navigating webview");
+              log_line!("[Startup] DB health ok, navigating webview");
             } else {
-              eprintln!("[Startup] DB health NOT ok after timeout — navigating anyway, check server.log and /api/health/db");
+              log_line!("[Startup] DB health NOT ok after timeout — navigating anyway, check server.log and /api/health/db");
             }
 
             if let Some(window) = app_handle.get_webview_window("main") {
-              let url: tauri::Url = target_url.parse().unwrap();
-              let _ = window.navigate(url);
+              match target_url.parse::<tauri::Url>() {
+                Ok(url) => { let _ = window.navigate(url); }
+                Err(e) => log_line!("[Startup] URL de navegación inválida: {}", e),
+              }
             }
           });
       }
@@ -1547,4 +1809,162 @@ pub fn run() {
         _ => {}
       }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("clinpos_test_{}_{}", name, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Crea una base mínima con las tablas que exige `stage_restore`.
+    fn make_clinpos_db(path: &Path, marker: &str, wal: bool) {
+        let conn = Connection::open(path).unwrap();
+        if wal {
+            let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0)).unwrap();
+        }
+        conn.execute_batch(
+            "CREATE TABLE Product (id INTEGER PRIMARY KEY, name TEXT);
+             CREATE TABLE Sale (id INTEGER PRIMARY KEY);
+             CREATE TABLE Setting (key TEXT PRIMARY KEY, value TEXT);",
+        )
+        .unwrap();
+        conn.execute("INSERT INTO Product (name) VALUES (?1)", [marker]).unwrap();
+    }
+
+    fn first_product(path: &Path) -> String {
+        let conn = Connection::open(path).unwrap();
+        conn.query_row("SELECT name FROM Product LIMIT 1", [], |r| r.get(0)).unwrap()
+    }
+
+    #[test]
+    fn vacuum_into_copies_wal_database_consistently() {
+        let dir = scratch_dir("vacuum");
+        let src = dir.join("src.db");
+        make_clinpos_db(&src, "dato-en-wal", true);
+        // Conexión viva con el WAL sin checkpoint: un fs::copy del .db perdería el dato.
+        let live = Connection::open(&src).unwrap();
+        live.execute("INSERT INTO Product (name) VALUES ('segundo')", []).unwrap();
+
+        let dest = dir.join("copy.db");
+        vacuum_into(&live, &dest).unwrap();
+
+        let copy = Connection::open(&dest).unwrap();
+        let count: i64 = copy.query_row("SELECT COUNT(*) FROM Product", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn vacuum_into_overwrites_existing_destination() {
+        let dir = scratch_dir("overwrite");
+        let src = dir.join("src.db");
+        make_clinpos_db(&src, "nuevo", false);
+        let dest = dir.join("copy.db");
+        fs::write(&dest, b"basura previa").unwrap();
+
+        vacuum_into(&Connection::open(&src).unwrap(), &dest).unwrap();
+        assert_eq!(first_product(&dest), "nuevo");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn stage_restore_rejects_invalid_files() {
+        let dir = scratch_dir("reject");
+        let pending = dir.join("x.restore_pending");
+
+        let garbage = dir.join("garbage.db");
+        fs::write(&garbage, b"esto no es sqlite, es solo texto de relleno largo").unwrap();
+        assert!(stage_restore(&garbage, &pending).is_err());
+
+        let other = dir.join("other.db");
+        Connection::open(&other).unwrap().execute_batch("CREATE TABLE Foo (id INTEGER)").unwrap();
+        let err = stage_restore(&other, &pending).unwrap_err();
+        assert!(err.contains("falta la tabla"), "mensaje inesperado: {}", err);
+        assert!(!pending.exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn staged_restore_is_applied_on_startup_with_safety_backup() {
+        let dir = scratch_dir("apply");
+        let target = dir.join("crm_prod.db");
+        make_clinpos_db(&target, "datos-actuales", true);
+        // Restos de WAL de la base vieja que no deben mezclarse con la restaurada.
+        fs::write(dir.join("crm_prod.db-wal"), b"wal viejo").unwrap();
+        fs::write(dir.join("crm_prod.db-shm"), b"shm viejo").unwrap();
+
+        let source = dir.join("copia.db");
+        make_clinpos_db(&source, "datos-de-la-copia", false);
+
+        stage_restore(&source, &pending_restore_path(&target)).unwrap();
+        // Hasta reiniciar, la base en uso no se toca.
+        assert_eq!(first_product(&target), "datos-actuales");
+
+        apply_pending_restores(&dir);
+
+        assert_eq!(first_product(&target), "datos-de-la-copia");
+        assert!(!pending_restore_path(&target).exists());
+        assert!(!dir.join("crm_prod.db-wal").exists());
+        assert!(!dir.join("crm_prod.db-shm").exists());
+        let safety: Vec<_> = fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".pre-restore-"))
+            .collect();
+        assert_eq!(safety.len(), 1);
+        assert_eq!(first_product(&safety[0].path()), "datos-actuales");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rotate_log_file_keeps_previous_runs() {
+        let dir = scratch_dir("rotate");
+        let log = dir.join("server.log");
+        for run in 1..=5 {
+            rotate_log_file(&log, 3);
+            fs::write(&log, format!("arranque {}", run)).unwrap();
+        }
+        assert_eq!(fs::read_to_string(&log).unwrap(), "arranque 5");
+        assert_eq!(fs::read_to_string(dir.join("server.log.1")).unwrap(), "arranque 4");
+        assert_eq!(fs::read_to_string(dir.join("server.log.2")).unwrap(), "arranque 3");
+        assert_eq!(fs::read_to_string(dir.join("server.log.3")).unwrap(), "arranque 2");
+        assert!(!dir.join("server.log.4").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Toca el Credential Manager real: `cargo test -- --ignored keyring_persists`.
+    /// Un Entry recién creado debe ver lo guardado por otro (almacén persistente);
+    /// con el almacén en memoria de keyring sin `windows-native` esto falla.
+    #[test]
+    #[ignore]
+    fn keyring_persists_across_entries() {
+        let service = "com.emidev.clinpos.test";
+        let user = format!("persist_check_{}", std::process::id());
+        Entry::new(service, &user).unwrap().set_password("valor-de-prueba").unwrap();
+        let read = Entry::new(service, &user).unwrap().get_password();
+        let _ = Entry::new(service, &user).unwrap().delete_credential();
+        assert_eq!(read.unwrap(), "valor-de-prueba");
+    }
+
+    #[test]
+    fn prune_backups_keeps_only_latest() {
+        let dir = scratch_dir("prune");
+        for stamp in ["20260101", "20260102", "20260103", "20260104"] {
+            fs::write(dir.join(format!("crm_prod.db.{}.bak", stamp)), b"x").unwrap();
+        }
+        fs::write(dir.join("otro.bak"), b"x").unwrap();
+        prune_backups(&dir, "crm_prod.db.", 2);
+        assert!(!dir.join("crm_prod.db.20260101.bak").exists());
+        assert!(!dir.join("crm_prod.db.20260102.bak").exists());
+        assert!(dir.join("crm_prod.db.20260103.bak").exists());
+        assert!(dir.join("crm_prod.db.20260104.bak").exists());
+        assert!(dir.join("otro.bak").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

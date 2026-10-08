@@ -56,10 +56,11 @@ export default function ConfigBackupTab({
         const res = await invoke<{ success: boolean; message?: string; error?: string; canceled?: boolean }>('restore_database');
         
         if (res.success) {
-          toast.success(res.message || 'Base de datos restaurada con éxito.');
-          setTimeout(() => {
-            window.location.reload();
-          }, 1500);
+          // La restauración se aplica al reiniciar: la base en uso no se pisa.
+          toast.success(res.message || 'Copia validada. Se aplicará al reiniciar ClinPOS.', { duration: 8000 });
+          if (confirm('La copia se aplicará al reiniciar ClinPOS. ¿Querés cerrar la aplicación ahora? Después volvé a abrirla.')) {
+            await invoke('exit_for_update');
+          }
         } else if (!res.canceled) {
           toast.error(res.error || 'Error al restaurar base de datos.');
         }
