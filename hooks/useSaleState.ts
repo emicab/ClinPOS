@@ -708,7 +708,11 @@ export const useSaleState = () => {
       (i) => i.productId === String(product.id),
     );
     const showFraccionada = isModuleEnabled("venta_fraccionada");
-    const unitType = showFraccionada ? product.unitType || "UNIT" : "UNIT";
+    const productUnit = product.unitType || "UNIT";
+    // Un producto por peso/volumen conserva su unidad aunque el módulo de venta
+    // fraccionada esté apagado; si no, el detalle redondea la cantidad a enteros.
+    const isFractional = productUnit === "WEIGHT" || productUnit === "VOLUME";
+    const unitType = showFraccionada || isFractional ? productUnit : "UNIT";
     if (showFraccionada && (unitType === "WEIGHT" || unitType === "VOLUME")) {
       setPendingWeightProduct(product);
       setPendingWeightUnitType(unitType);
