@@ -2,6 +2,16 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.18.1] - 2026-10-09
+
+### Corregido
+- **Productos por peso/volumen en Nueva Venta**: con el módulo de venta fraccionada apagado, el detalle trataba el producto como unidad y redondeaba la cantidad al entero (1,2 kg quedaba en 1). Ahora conserva kg/L y acepta decimales.
+- **Combos**: al quitar un componente de un combo se anula su descuento.
+
+### Mejorado
+- **Carga de Stock**: nuevo selector **Agregar | Actualizar**. *Agregar* suma la cantidad ingresada al stock actual (muestra el resultado antes de guardar); *Actualizar* fija el stock como antes. La suma es atómica y respeta la sucursal del equipo.
+- **Nueva Venta**: los combos se muestran en una sola fila con scroll horizontal.
+
 ## [1.18.0] - 2026-10-07
 
 ### Importante al actualizar

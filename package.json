@@ -1,6 +1,6 @@
 {
   "name": "clinpos",
-  "version": "1.18.0",
+  "version": "1.18.1",
   "description": "ClinPOS By EmiDev",
   "author": "Emiliano Cabanillas",
   "private": true,
@@ -12,11 +12,9 @@
   "scripts": {
     "dev": "concurrently \"npm:dev:next\" \"npm:dev:electron\"",
     "dev:next": "powershell -Command \"$env:NODE_ENV='development'; node scripts/migrate-local-databases.js; npx next dev --hostname 0.0.0.0\"",
-    "dev:electron": "wait-on http://localhost:3000 && electron .",
     "dev:tauri": "powershell -Command \"$env:PATH = \\\"$env:USERPROFILE\\.cargo\\bin;$env:PATH\\\"; npx @tauri-apps/cli dev\"",
     "check:drift": "node scripts/check-drift.js",
     "build:next": "node scripts/clean-build.js && node scripts/check-drift.js && npx prisma generate && node scripts/migrate-template.js && next build && powershell -Command \"New-Item -ItemType Directory -Path dist_tauri -Force; Copy-Item -Recurse public/* dist_tauri/; Copy-Item -Recurse .next/standalone/* app_standalone/; New-Item -ItemType Directory -Path app_standalone/.next -ErrorAction SilentlyContinue; Copy-Item -Recurse .next/static app_standalone/.next/static; Copy-Item -Recurse public app_standalone/public; Copy-Item (Get-Command node).Source app_standalone/node.exe\" && node scripts/write-cloudinary-env.js && node scripts/strip-standalone-env.js",
-    "build": "npm run build:next && npx electron scripts/compile-bytecode.js && electron-builder",
     "build:tauri": "node scripts/clean-build.js && powershell -Command \"$env:PATH = \\\"$env:USERPROFILE\\.cargo\\bin;$env:PATH\\\"; npx @tauri-apps/cli build\"",
     "publish": "echo 'Para publicar una release, simplemente crea un tag en git (ej. git tag v1.5.6) y haz push (git push origin v1.5.6). GitHub Actions se encargará de compilar y subir el instalador a Releases.' && exit 1",
     "tauri": "tauri",
