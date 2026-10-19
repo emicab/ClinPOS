@@ -41,7 +41,15 @@ export async function saveFile(
         ext,
       });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : "No se pudo guardar el archivo.";
+      // Tauri rechaza invoke() con un string (no un Error): sin esto el motivo real se pierde.
+      const message =
+        err instanceof Error
+          ? err.message
+          : typeof err === "string" && err
+            ? err
+            : err && typeof err === "object"
+              ? JSON.stringify(err)
+              : "No se pudo guardar el archivo.";
       return { success: false, error: message };
     }
   }
