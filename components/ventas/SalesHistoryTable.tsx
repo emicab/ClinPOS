@@ -84,14 +84,14 @@ const SalesHistoryTable = () => {
         discountCode: sale.discountCodeApplied || '-',
         cajaId: sale.cashRegister ? `#${sale.cashRegister.id}` : '-',
       }));
-      const ok = await exportToCSV('historial_ventas', dataToExport, headers);
-      if (ok) {
+      const result = await exportToCSV('historial_ventas', dataToExport, headers);
+      if (result.success) {
         toast.success('Historial exportado a CSV.');
-      } else {
-        toast.error('No se pudo exportar el CSV.');
+      } else if (!result.canceled) {
+        toast.error(`No se pudo exportar el CSV${result.error ? `: ${result.error}` : '.'}`);
       }
-    } catch {
-      toast.error('No se pudo exportar el CSV.');
+    } catch (err: any) {
+      toast.error(`No se pudo exportar el CSV: ${err?.message || 'error desconocido'}`);
     }
   };
 

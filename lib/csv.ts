@@ -1,7 +1,7 @@
 // lib/csv.ts
-import { saveFile } from "./saveFile";
+import { saveFile, type SaveFileResult } from "./saveFile";
 
-export async function exportToCSV(filename: string, data: any[], headers: { key: string, label: string }[]): Promise<boolean> {
+export async function exportToCSV(filename: string, data: any[], headers: { key: string, label: string }[]): Promise<SaveFileResult> {
   const csvRows = [];
 
   // Header row
@@ -19,8 +19,7 @@ export async function exportToCSV(filename: string, data: any[], headers: { key:
 
   const csvContent = '\ufeff' + csvRows.join('\n'); // Adding BOM for Excel UTF-8 support
   const bytes = new TextEncoder().encode(csvContent);
-  const result = await saveFile(bytes, `${filename}.csv`, 'text/csv;charset=utf-8;');
-  return result.success;
+  return saveFile(bytes, `${filename}.csv`, 'text/csv;charset=utf-8;');
 }
 
 export function parseCSV(text: string): string[][] {

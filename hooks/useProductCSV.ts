@@ -23,11 +23,15 @@ export function useProductCSV(fetchProducts: () => void) {
       categoryName: p.category?.name || '',
       supplierName: p.supplier?.name || '',
     }));
-    const ok = await exportToCSV('productos', dataToExport, headers);
-    if (ok) {
-      toast.success('Productos exportados a CSV con éxito.');
-    } else {
-      toast.error('No se pudo exportar el CSV.');
+    try {
+      const result = await exportToCSV('productos', dataToExport, headers);
+      if (result.success) {
+        toast.success('Productos exportados a CSV con éxito.');
+      } else if (!result.canceled) {
+        toast.error(`No se pudo exportar el CSV${result.error ? `: ${result.error}` : '.'}`);
+      }
+    } catch (err: any) {
+      toast.error(`No se pudo exportar el CSV: ${err?.message || 'error desconocido'}`);
     }
   }, []);
 
