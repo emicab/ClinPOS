@@ -2,6 +2,12 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.18.3] - 2026-10-19
+
+### Corregido
+- **Escáner en Nueva Venta**: al pistolear un producto B justo después de un producto A, se sumaba +1 a A en vez de agregar B. Una búsqueda atrasada repoblaba la lista con A y el Enter tomaba ese resultado. Ahora las búsquedas viejas se descartan y solo se acepta el primer resultado si coincide con lo escrito.
+- **Exportar CSV**: el aviso de error ahora indica el motivo real y ya no aparece si se cancela el diálogo "Guardar como" (Productos e Historial de ventas).
+
 ## [1.18.1] - 2026-10-09
 
 ### Corregido
