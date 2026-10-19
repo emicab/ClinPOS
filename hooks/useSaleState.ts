@@ -398,6 +398,9 @@ export const useSaleState = () => {
       setSearchedProducts([]);
       return;
     }
+    // `cancelled` evita que una respuesta de una búsqueda anterior (p. ej. el
+    // producto recién escaneado) repueble la lista después de limpiar el campo.
+    let cancelled = false;
     const timer = setTimeout(async () => {
       try {
         const res = await fetch(
@@ -405,6 +408,7 @@ export const useSaleState = () => {
         );
         if (res.ok) {
           const data = await res.json();
+          if (cancelled) return;
           const itemsInCartIds = formData.items.map((i) =>
             parseInt(i.productId),
           );
@@ -422,7 +426,10 @@ export const useSaleState = () => {
         }
       } catch {}
     }, 300);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [productSearchTerm, formData.items, activeBranchIdStr, getLocalStock]);
 
   // Combos que coinciden con el término del buscador (unifica productos+combos
@@ -627,7 +634,14 @@ export const useSaleState = () => {
     const exactVisible = searchedProducts.find(
       (product) => product.sku?.trim().toLocaleLowerCase() === normalizedTerm,
     );
-    const visibleProduct = exactVisible || searchedProducts[0];
+    // Sin coincidencia exacta de SKU, solo se acepta el primer resultado visible
+    // si realmente corresponde a lo escrito; así una lista vieja no agrega otro
+    // producto (antes un escaneo B sumaba +1 al producto A anterior).
+    const matchesTerm = (product: Product) =>
+      normalizeCombo(product.name || "").includes(normTerm) ||
+      (product.sku || "").trim().toLocaleLowerCase().includes(normalizedTerm);
+    const visibleProduct =
+      exactVisible || searchedProducts.find(matchesTerm);
 
     if (visibleProduct) {
       handleSelectProduct(visibleProduct);
