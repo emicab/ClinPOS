@@ -2,6 +2,12 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.18.4] - 2026-10-19
+
+### Corregido
+- **Actualizar no terminaba los procesos de Node.js**: el cierre de `node.exe` huérfanos buscaba la ruta con el prefijo interno `\\?\` y nunca coincidía, así que el instalador encontraba archivos bloqueados. Ahora la búsqueda normaliza la ruta (y compara también por ejecutable), y el instalador cierra por su cuenta los `node.exe` de la carpeta de ClinPOS antes de copiar archivos.
+- **Exportar a CSV/PDF**: si el guardado nativo falla, se usa la descarga del navegador como alternativa y, si ambas fallan, el aviso muestra los dos motivos.
+
 ## [1.18.3] - 2026-10-19
 
 ### Corregido
