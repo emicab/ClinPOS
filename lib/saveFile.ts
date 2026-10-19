@@ -50,12 +50,21 @@ export async function saveFile(
             : err && typeof err === "object"
               ? JSON.stringify(err)
               : "No se pudo guardar el archivo.";
-      return { success: false, error: message };
+      console.error("[saveFile] save_report_file falló, se intenta la descarga del navegador:", message);
+      // Plan B: descarga del WebView. Si también falla, se informan ambos motivos.
+      const fallback = downloadViaBrowser(bytes, fileName, mime);
+      return fallback.success
+        ? fallback
+        : { success: false, error: `${message} (descarga alternativa: ${fallback.error})` };
     }
   }
 
+  return downloadViaBrowser(bytes, fileName, mime);
+}
+
+function downloadViaBrowser(bytes: Uint8Array, fileName: string, mime: string): SaveFileResult {
   try {
-    const blob = new Blob([bytes], { type: mime });
+    const blob = new Blob([bytes as BlobPart], { type: mime });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
