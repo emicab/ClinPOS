@@ -1517,7 +1517,7 @@ fn find_stale_node_pids(needle: &str) -> Vec<u32> {
         return vec![];
     }
     let ps = format!(
-        "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | ForEach-Object {{ if ($_.CommandLine -and $_.CommandLine.Replace('\\','/').ToLower().Contains('{0}')) {{ $_.ProcessId }} }}",
+        "Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | ForEach-Object {{ $c = if ($_.CommandLine) {{ $_.CommandLine.Replace('\\','/').ToLower() }} else {{ '' }}; $e = if ($_.ExecutablePath) {{ $_.ExecutablePath.Replace('\\','/').ToLower() }} else {{ '' }}; if ($c.Contains('{0}') -or $e.StartsWith('{0}')) {{ $_.ProcessId }} }}",
         needle.replace('\'', "")
     );
     let out = Command::new("powershell")
@@ -1554,8 +1554,12 @@ fn kill_pids(pids: &[u32], tag: &str) -> usize {
 }
 
 fn standalone_needle(standalone_dir: &Path) -> String {
+    // `resource_dir()` puede traer el prefijo verbatim `\\?\`; la línea de comandos
+    // real de node.exe no lo tiene, así que sin quitarlo el patrón nunca coincidía
+    // y los node.exe huérfanos sobrevivían al update.
     standalone_dir
         .to_string_lossy()
+        .replace("\\\\?\\", "")
         .replace('\\', "/")
         .to_lowercase()
 }
