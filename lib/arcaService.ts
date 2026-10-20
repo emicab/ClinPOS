@@ -208,6 +208,8 @@ export async function createElectronicInvoice(
     Concepto: concepto,
     DocTipo: docType,
     DocNro: docNumber,
+    // parche: 5 = Consumidor Final solo si DocTipo es 99; con otro DocTipo falta la condición frente al IVA del cliente
+    ...(Number(docType) === 99 ? { CondicionIVAReceptorId: 5 } : {}),
     CbteDesde: nextNumber,
     CbteHasta: nextNumber,
     CbteFch: dateStr,
