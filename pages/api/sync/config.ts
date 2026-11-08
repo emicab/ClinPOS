@@ -3,6 +3,7 @@ import prisma from "../../../lib/prisma";
 import crypto from "crypto";
 import os from "os";
 import { isProDevice } from "../../../lib/branchIdentity";
+import { isCloudSyncEnabled } from "../../../lib/cloudPolicy";
 
 function isServiceRoleKey(value: string): boolean {
   try {
@@ -23,6 +24,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    // Modo local: no se expone ninguna credencial ni configuración de nube.
+    if (!(await isCloudSyncEnabled())) {
+      return res.status(403).json({ message: "Modo local activo: la nube está desactivada.", localMode: true });
+    }
+
     // El Realtime/la nube es exclusivo del Plan Pro.
     if (!(await isProDevice())) {
       return res.status(403).json({ message: "El acceso a la nube requiere el Plan Pro.", blockedByPlan: true });

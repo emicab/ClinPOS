@@ -8,6 +8,7 @@ import { WebOrdersFilterBar } from "@/components/pedidos-web/WebOrdersFilterBar"
 import { ComandaGrid } from "@/components/pedidos-web/ComandaGrid";
 import { OrdersTable } from "@/components/pedidos-web/OrdersTable";
 import { OrderDetailModal } from "@/components/pedidos-web/OrderDetailModal";
+import { useModules } from "@/hooks/useModules";
 
 export default function PedidosWebPage() {
   const {
@@ -40,6 +41,22 @@ export default function PedidosWebPage() {
     handleBranchChange,
     filteredOrders,
   } = useWebOrdersController();
+
+  const { cloudSyncEnabled } = useModules();
+  if (!cloudSyncEnabled) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-3 p-12 py-24 text-center">
+        <h1 className="text-xl font-bold text-foreground">
+          Pedidos web no disponible
+        </h1>
+        <p className="max-w-md text-sm text-foreground-muted">
+          La tienda web y los pedidos web están desactivados porque ClinPOS está
+          funcionando en modo local. Las ventas, el stock y los datos se guardan
+          en esta computadora.
+        </p>
+      </div>
+    );
+  }
 
   const activeOrdersCount = orders.filter(
     (o) => o.status !== "DELIVERED" && o.status !== "CANCELLED",

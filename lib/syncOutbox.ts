@@ -4,6 +4,7 @@
 // pedidos web locales, ventas/compras/traspasos, etc.).
 import prisma from "./prisma";
 import { isProDevice } from "./branchIdentity";
+import { isCloudSyncEnabled } from "./cloudPolicy";
 
 export type OutboxOperation = "UPSERT" | "DELETE";
 
@@ -27,6 +28,9 @@ export async function enqueueOutbox(
   payload?: Record<string, unknown>,
 ): Promise<void> {
   try {
+    // Modo local: no se acumulan operaciones para la nube.
+    if (!(await isCloudSyncEnabled())) return;
+
     // En planes sin nube no se acumulan operaciones pendientes: evita el aviso
     // "X pendientes de sincronizar" en configuraciones puramente locales.
     if (!(await isProDevice())) return;
@@ -106,6 +110,8 @@ export async function enqueueOutbox(
 
 export async function getPendingCount(): Promise<number> {
   try {
+    // En modo local no existen pendientes de nube (la cola queda dormida).
+    if (!(await isCloudSyncEnabled())) return 0;
     return await prisma.syncOutbox.count({ where: { status: "PENDING" } });
   } catch {
     return 0;
@@ -258,6 +264,11 @@ async function pushRecords(payload: Record<string, any[]>): Promise<boolean> {
 // Si hay error de red (networkError=true), detiene el procesamiento y el resto
 // queda PENDING para el próximo intento.
 export async function drainOutbox(limit = 1000): Promise<{ drained: number; remaining: number; networkError: boolean }> {
+  // Modo local: no se procesa ninguna operación contra la nube.
+  if (!(await isCloudSyncEnabled())) {
+    return { drained: 0, remaining: 0, networkError: false };
+  }
+
   let drained = 0;
   let networkError = false;
 

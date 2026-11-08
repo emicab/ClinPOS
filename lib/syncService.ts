@@ -8,13 +8,13 @@ import fs from "fs/promises";
 import path from "path";
 import { isMainDevice } from "./branchIdentity";
 import { getDataDir, getDeviceSettings } from "./profiles";
+import { isCloudSyncEnabled } from "./cloudPolicy";
 import {
   fetchWithTimeout,
   recalcProductTotal,
   recalcProductTotals,
   getMainBranchId,
   isCloudAllowed,
-  revalidateLicenseIfMain,
   bootstrapBranchStocks,
   loadLocalEntities,
   mapCloudWebOrderIds,
@@ -165,6 +165,7 @@ type SyncResult = {
   lastSync?: string;
   syncedTables?: Record<string, number>;
   tenantId?: string;
+  localMode?: boolean;
 };
 
 // Evita que el auto-sync y un sync manual trabajen sobre el mismo watermark
@@ -219,6 +220,16 @@ async function acquirePersistentSyncLock(): Promise<(() => Promise<void>) | null
 
 async function runSupabaseSyncInternal(forceFullSync: boolean = false): Promise<SyncResult> {
   try {
+    // Modo local: salir antes de cualquier lectura o llamada de red. La
+    // licencia se revalida por su endpoint propio (/api/license/check), no acá.
+    if (!(await isCloudSyncEnabled())) {
+      return {
+        success: true,
+        localMode: true,
+        message: "Modo local activo: la sincronización con la nube está desactivada.",
+      };
+    }
+
     const { loadEnv } = await import("./envLoader");
     loadEnv();
 
@@ -241,11 +252,6 @@ async function runSupabaseSyncInternal(forceFullSync: boolean = false): Promise<
     }
 
     const isMainDeviceFlag = await isMainDevice();
-
-    // La Casa Central revalida su licencia online en cada sync: si el plan bajó
-    // (mensualidad no renovada) se actualiza app_plan local y se propaga a la
-    // nube para que las sucursales también bajen.
-    await revalidateLicenseIfMain(isMainDeviceFlag);
 
     // La sincronización en la nube es exclusiva del Plan Pro.
     if (!(await isCloudAllowed())) {

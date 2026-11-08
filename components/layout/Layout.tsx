@@ -39,6 +39,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
     currentUser,
     hasSupabaseConfig,
     storageMode,
+    cloudSyncEnabled,
     hasRolePermission,
     plan,
   } = useModules();
@@ -49,9 +50,10 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   const syncFailCount = React.useRef(0);
   const syncCooldownUntil = React.useRef(0);
 
-  // El sync a la nube solo está activo en planes con respaldo en la nube.
+  // El sync a la nube solo está activo si el modo local está apagado y el plan
+  // tiene respaldo en la nube.
   const isSyncEnabled =
-    plan === "pro" && hasSupabaseConfig && storageMode !== "local";
+    cloudSyncEnabled && plan === "pro" && hasSupabaseConfig && storageMode !== "local";
 
   const showOnboarding = !isLoading && businessProfile === "unset";
   const showPinLock =
@@ -62,6 +64,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   React.useEffect(() => {
     if (
       isLoading ||
+      !cloudSyncEnabled ||
       plan !== "pro" ||
       !hasSupabaseConfig ||
       showOnboarding ||
@@ -118,7 +121,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       clearInterval(fallbackInterval);
       window.removeEventListener("online", onConnectionRestored);
     };
-  }, [isLoading, hasSupabaseConfig, showOnboarding, showPinLock, storageMode, plan]);
+  }, [isLoading, hasSupabaseConfig, showOnboarding, showPinLock, storageMode, plan, cloudSyncEnabled]);
 
   // Realtime liviano: SOLO WebOrder dispara un pull de pedidos (no un sync
   // full). ProductBranchStock se excluyó a propósito: cada venta escribe
@@ -126,7 +129,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
   // full-syncs (origen del salto 800MB→4GB / 1.4M mensajes). El ciclo
   // periódico sigue siendo el respaldo ante eventos perdidos.
   React.useEffect(() => {
-    if (isLoading || plan !== "pro" || !hasSupabaseConfig || showOnboarding || showPinLock || storageMode === "local") return;
+    if (isLoading || !cloudSyncEnabled || plan !== "pro" || !hasSupabaseConfig || showOnboarding || showPinLock || storageMode === "local") return;
     let channel: ReturnType<ReturnType<typeof createClient>["channel"]> | null = null;
     let cancelled = false;
     let refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -163,7 +166,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
       if (refreshTimer) clearTimeout(refreshTimer);
       if (channel) channel.unsubscribe();
     };
-  }, [isLoading, hasSupabaseConfig, showOnboarding, showPinLock, storageMode, plan]);
+  }, [isLoading, hasSupabaseConfig, showOnboarding, showPinLock, storageMode, plan, cloudSyncEnabled]);
 
   let isAccessAllowed = true;
   if (

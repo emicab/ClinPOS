@@ -5,6 +5,7 @@ import { encryptText, decryptText } from '../../../lib/encryption';
 import { getDeviceBranchId, isMainDevice } from '../../../lib/branchIdentity';
 import { getDeviceSettings } from '../../../lib/profiles';
 import { isDeviceGlobalKey, setDeviceSettings } from '../../../lib/deviceSettings';
+import { invalidateCloudPolicyCache } from '../../../lib/cloudPolicy';
 import os from 'os';
 
 const OFFICIAL_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://htroigemnwqiugieodmv.supabase.co';
@@ -53,6 +54,7 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   plan_type: 'basico',
   unlocked_plan_pro: 'false',
   storage_mode: 'safe',
+  cloud_sync_enabled: 'false',
   business_profile: 'general',
   module_recetario: 'false',
   license_key: '',
@@ -134,6 +136,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       if (Object.keys(deviceEntries).length > 0) {
         await setDeviceSettings(deviceEntries);
+        // El flag de nube puede haber cambiado: refrescar el cache del policy.
+        invalidateCloudPolicyCache();
       }
 
       for (const [key, rawValue] of Object.entries(businessEntries)) {

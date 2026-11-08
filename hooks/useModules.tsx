@@ -38,6 +38,7 @@ interface ModuleContextType {
   modules: Record<string, boolean>;
   businessProfile: string;
   storageMode: string;
+  cloudSyncEnabled: boolean;
   plan: 'basico' | 'pro';
   isLoading: boolean;
   refresh: () => Promise<void>;
@@ -60,6 +61,7 @@ export const ModuleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [modules, setModules] = useState<Record<string, boolean>>({});
   const [businessProfile, setBusinessProfile] = useState<string>("general");
   const [storageMode, setStorageMode] = useState<string>("local");
+  const [cloudSyncEnabled, setCloudSyncEnabled] = useState<boolean>(false);
   const [plan, setPlan] = useState<'basico' | 'pro'>("basico");
   const [planLoaded, setPlanLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -103,6 +105,10 @@ export const ModuleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setModules(parsedModules);
       if (data.business_profile) setBusinessProfile(data.business_profile);
       if (data.storage_mode) setStorageMode(data.storage_mode);
+      // Modo local por defecto: solo se activa si el flag dice explícitamente true.
+      setCloudSyncEnabled(
+        data.cloud_sync_enabled === "true" || data.cloud_sync_enabled === "1",
+      );
       
       const isProPlan = data.app_plan === 'pro' || data.plan_type === 'pro' || data.unlocked_plan_pro === 'true' || data.storage_mode === 'seguro';
       setPlan(isProPlan ? 'pro' : 'basico');
@@ -141,6 +147,10 @@ export const ModuleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const isModuleEnabled = useCallback(
     (moduleId: string) => {
+      // Módulos que dependen de la nube: apagados en modo local.
+      if (!cloudSyncEnabled && ['pedidos_web', 'backup_nube'].includes(moduleId)) {
+        return false;
+      }
       // Módulos exclusivos del Plan Pro
       if (['cuenta_corriente', 'analiticas', 'roles', 'backup_nube', 'consignaciones', 'agente_ia', 'clinia', 'traspasos', 'pedidos_web'].includes(moduleId)) {
         if (!planLoaded) return true;
@@ -153,7 +163,7 @@ export const ModuleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Todos los demás módulos básicos están siempre habilitados por defecto.
       return true;
     },
-    [plan, planLoaded, modules]
+    [plan, planLoaded, modules, cloudSyncEnabled]
   );
 
   const hasRolePermission = useCallback(
@@ -169,7 +179,7 @@ export const ModuleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   return (
     <ModuleContext.Provider
       value={{
-        isModuleEnabled, modules, businessProfile, storageMode, plan,
+        isModuleEnabled, modules, businessProfile, storageMode, cloudSyncEnabled, plan,
         isLoading, refresh: fetchModules, currentUser, loginUser, logout,
         supabaseLastSync, hasSupabaseConfig, tier, isPro, isFree,
         rolePermissions, hasRolePermission,

@@ -11,6 +11,7 @@ interface ConfigBackupTabProps {
   handleManualSync: () => void;
   isSyncing: boolean;
   isPlanPro: boolean;
+  cloudSyncEnabled: boolean;
 }
 
 export default function ConfigBackupTab({
@@ -18,6 +19,7 @@ export default function ConfigBackupTab({
   handleManualSync,
   isSyncing,
   isPlanPro,
+  cloudSyncEnabled,
 }: ConfigBackupTabProps) {
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
@@ -112,7 +114,8 @@ export default function ConfigBackupTab({
         </div>
       </section>
 
-      {/* Sincronización en la Nube Integrada */}
+      {/* Sincronización en la Nube Integrada (solo si la nube está habilitada) */}
+      {cloudSyncEnabled && (
       <section className="bg-muted p-6 rounded-xl shadow space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
@@ -183,6 +186,7 @@ export default function ConfigBackupTab({
           </div>
         )}
       </section>
+      )}
     </div>
   );
 }
