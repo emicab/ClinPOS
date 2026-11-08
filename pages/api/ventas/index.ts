@@ -14,6 +14,7 @@ import {
   deductRecipeStock,
   getRecipeAvailability,
 } from '../../../lib/recipeStock';
+import { applyMovement, getBranchStock } from '../../../lib/stockService';
 import { enqueueOutbox, enqueueStockMovement } from '../../../lib/syncOutbox';
 
 interface SaleItemInput {
@@ -414,15 +415,21 @@ export default async function handler(
             throw new Error(`Producto con ID ${item.productId} no encontrado.`);
           }
 
-          const bId = effectiveBranchId ?? (req.body.branchId ? parseInt(req.body.branchId) : undefined);
-          const recipeBranchId = bId && !isNaN(bId) ? bId : undefined;
+          const saleBranchId = effectiveBranchId ?? null;
           const isRecipeProduct = product.isRecipe === true;
           if (isRecipeProduct) recipeProductIds.add(product.id);
 
-          // Validación de stock de productos simples. Los elaborados ya se
-          // validaron de forma combinada contra los ingredientes (antes del loop).
-          if (!isPending && !isRecipeProduct && Number(product.quantityStock) < item.quantity) {
-            throw new Error(`Stock insuficiente para el producto "${product.name}". Disponible: ${product.quantityStock}, Solicitado: ${item.quantity}.`);
+          // Validación de stock de productos simples contra la sucursal de la
+          // venta (nunca contra el global, que suma todas las sucursales).
+          // Los elaborados ya se validaron de forma combinada contra sus
+          // ingredientes antes del loop.
+          if (!isPending && !isRecipeProduct) {
+            const available = saleBranchId !== null
+              ? ((await getBranchStock(tx, item.productId, saleBranchId)) ?? 0)
+              : Number(product.quantityStock) || 0;
+            if (available < item.quantity) {
+              throw new Error(`Stock insuficiente para el producto "${product.name}". Disponible: ${available}, Solicitado: ${item.quantity}.`);
+            }
           }
 
           let purchasePriceAtSale = product.pricePurchase;
@@ -456,59 +463,39 @@ export default async function handler(
           if (!isPending) {
             if (isRecipeProduct) {
               // Elaborado: no se descuenta su propio stock, sino el de los ingredientes.
-              const affected = await deductRecipeStock(tx, item.productId, item.quantity, recipeBranchId);
+              const affected = await deductRecipeStock(tx, item.productId, item.quantity, saleBranchId);
               affectedIngredientIds.push(...affected);
             } else {
-              const updateResult = await tx.product.updateMany({
-                where: {
-                  id: item.productId,
-                  quantityStock: { gte: item.quantity }
-                },
-                data: {
-                  quantityStock: { decrement: item.quantity }
-                }
+              await applyMovement(tx, {
+                productId: item.productId,
+                branchId: saleBranchId,
+                delta: -Number(item.quantity),
+                reason: "SALE",
+                refType: "Sale",
+                refId: newSale.id,
+                note: product.name,
               });
-              if (updateResult.count === 0) {
-                throw new Error(`Stock insuficiente o modificado concurrentemente para el producto "${product.name}".`);
-              }
-
-              if (recipeBranchId) {
-                await tx.productBranchStock.upsert({
-                  where: {
-                    productId_branchId: {
-                      productId: item.productId,
-                      branchId: recipeBranchId
-                    }
-                  },
-                  update: {
-                    quantityStock: { decrement: item.quantity }
-                  },
-                  create: {
-                    productId: item.productId,
-                    branchId: recipeBranchId,
-                    quantityStock: -item.quantity
-                  }
-                });
-              }
             }
           }
 
           if (!isPending) {
             if (isRecipeProduct) {
               // Alerta de elaborado: comparar la disponibilidad derivada contra el mínimo.
-              const afterAvailability = await getRecipeAvailability(tx, item.productId, recipeBranchId);
+              const afterAvailability = await getRecipeAvailability(tx, item.productId, saleBranchId);
               if (product.stockMinAlert !== null && afterAvailability.available < product.stockMinAlert) {
                 console.warn(`[STOCK ALERT] El producto elaborado "${product.name}" (ID: ${product.id}) quedó con disponibilidad ${afterAvailability.available} por debajo del mínimo (${product.stockMinAlert}).`);
               }
             } else {
               // Solo se relee el stock si el producto tiene un minimo definido.
               if (product.stockMinAlert !== null) {
-                const updatedProduct = await tx.product.findUnique({
-                  where: { id: item.productId },
-                  select: { id: true, name: true, quantityStock: true, stockMinAlert: true }
-                });
-                if (updatedProduct && updatedProduct.stockMinAlert !== null && updatedProduct.quantityStock < updatedProduct.stockMinAlert) {
-                  console.warn(`[STOCK ALERT] El producto "${updatedProduct.name}" (ID: ${updatedProduct.id}) ha quedado por debajo del mínimo de alerta de stock (${updatedProduct.stockMinAlert}). Stock actual: ${updatedProduct.quantityStock}`);
+                const availableAfter = saleBranchId !== null
+                  ? ((await getBranchStock(tx, item.productId, saleBranchId)) ?? 0)
+                  : Number((await tx.product.findUnique({
+                      where: { id: item.productId },
+                      select: { quantityStock: true },
+                    }))?.quantityStock) || 0;
+                if (availableAfter < product.stockMinAlert) {
+                  console.warn(`[STOCK ALERT] El producto "${product.name}" (ID: ${product.id}) ha quedado por debajo del mínimo de alerta de stock (${product.stockMinAlert}). Stock actual: ${availableAfter}`);
                 }
               }
             }

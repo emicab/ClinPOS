@@ -1,6 +1,8 @@
 import { PrismaClient } from '@prisma/client';
 import * as fs from 'fs';
 import * as path from 'path';
+import { resolveTargetBranch } from '../lib/stockAdjust';
+import { setStock } from '../lib/stockService';
 
 const prisma = new PrismaClient();
 
@@ -134,18 +136,29 @@ async function main() {
   return isNaN(parsed) ? 0 : parsed;
 };
 
-    // Create product
-    await prisma.product.create({
+    // Create product. El stock se escribe después con el servicio único
+    // (por sucursal y con ledger), no directo en Product.quantityStock.
+    const createdProduct = await prisma.product.create({
       data: {
         name: row.descripcion,
         sku: row.codigo || null,
         pricePurchase: parseFloat(row.costo.replace(',', '.')) || 0,
         priceSale: parseFloat(row.precio.replace(',', '.')) || 0,
-        quantityStock: parseInt(row.stock) || 0,
+        quantityStock: 0,
         stockMinAlert: row.stockMinimo ? (parseInt(row.stockMinimo) || null) : null,
         brandId: genericBrand.id,
         categoryId: categoryId || defaultCategory.id,
       },
+    });
+
+    const { branchId: importBranchId } = await resolveTargetBranch(null);
+    await setStock(prisma, {
+      productId: createdProduct.id,
+      branchId: importBranchId,
+      quantity: parseInt(row.stock) || 0,
+      reason: 'CSV_IMPORT',
+      refType: 'ProductImport',
+      refId: createdProduct.id,
     });
     created++;
   }

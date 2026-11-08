@@ -59,6 +59,7 @@ model Product {
   consignmentItems ConsignmentItem[]
   webOrderItems    WebOrderItem[]
   branchStocks     ProductBranchStock[]
+  stockMovements   StockMovement[]
   stockTransferItems StockTransferItem[]
   recipeItems      RecipeItem[]     @relation("RecipeProduct")
   recipeIngredientOf RecipeItem[]   @relation("RecipeIngredient")
@@ -648,6 +649,7 @@ model Branch {
   createdAt     DateTime             @default(now())
   updatedAt     DateTime             @updatedAt
   productStocks ProductBranchStock[]
+  stockMovements StockMovement[]
   transfersFrom StockTransfer[]      @relation("SourceBranch")
   transfersTo   StockTransfer[]      @relation("TargetBranch")
   sales         Sale[]
@@ -666,6 +668,28 @@ model ProductBranchStock {
   @@id([productId, branchId])
 
   @@index([branchId])
+}
+
+// Libro local de movimientos de stock. Explica cada cambio (quién/cuándo/por
+// qué) y permite auditar sin adivinar. No se usa para sincronizar: en modo
+// local es solo trazabilidad dentro de SQLite.
+model StockMovement {
+  id            Int      @id @default(autoincrement())
+  productId     Int
+  branchId      Int?
+  delta         Float
+  quantityAfter Float
+  reason        String
+  refType       String?
+  refId         String?
+  note          String?
+  createdAt     DateTime @default(now())
+  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branch        Branch?  @relation(fields: [branchId], references: [id])
+
+  @@index([productId, branchId])
+  @@index([createdAt])
+  @@index([refType, refId])
 }
 
 model StockTransfer {

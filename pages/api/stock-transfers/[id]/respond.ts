@@ -59,13 +59,15 @@ export default async function handler(
         data: { status: 'PROCESSING' },
       });
       if (claimed.count === 0) throw new Error('TRANSFER_ALREADY_RESPONDED');
+        const { applyMovement } = await import('../../../../lib/stockService');
         for (const item of transfer.items) {
-          await tx.productBranchStock.upsert({
-            where: {
-              productId_branchId: { productId: item.productId, branchId: transfer.sourceBranchId },
-            },
-            update: { quantityStock: { increment: item.quantity } },
-            create: { productId: item.productId, branchId: transfer.sourceBranchId, quantityStock: item.quantity },
+          await applyMovement(tx, {
+            productId: item.productId,
+            branchId: transfer.sourceBranchId,
+            delta: Number(item.quantity),
+            reason: "TRANSFER_REJECT",
+            refType: "StockTransfer",
+            refId: transferId,
           });
         }
         await tx.stockTransfer.update({
@@ -112,28 +114,32 @@ export default async function handler(
         data: { status: 'PROCESSING' },
       });
       if (claimed.count === 0) throw new Error('TRANSFER_ALREADY_RESPONDED');
+      const { applyMovement } = await import('../../../../lib/stockService');
       for (const item of transfer.items) {
         const received = receivedMap[item.productId] ?? item.quantity;
 
         if (received > 0) {
-          await tx.productBranchStock.upsert({
-            where: {
-              productId_branchId: { productId: item.productId, branchId: transfer.targetBranchId },
-            },
-            update: { quantityStock: { increment: received } },
-            create: { productId: item.productId, branchId: transfer.targetBranchId, quantityStock: received },
+          await applyMovement(tx, {
+            productId: item.productId,
+            branchId: transfer.targetBranchId,
+            delta: Number(received),
+            reason: "TRANSFER_IN",
+            refType: "StockTransfer",
+            refId: transferId,
+            note: `Recepción en sucursal ${transfer.targetBranchId}`,
           });
         }
 
         // Lo que no llegó (enviado - recibido) se repone al origen
         const difference = item.quantity - received;
         if (difference > 0) {
-          await tx.productBranchStock.upsert({
-            where: {
-              productId_branchId: { productId: item.productId, branchId: transfer.sourceBranchId },
-            },
-            update: { quantityStock: { increment: difference } },
-            create: { productId: item.productId, branchId: transfer.sourceBranchId, quantityStock: difference },
+          await applyMovement(tx, {
+            productId: item.productId,
+            branchId: transfer.sourceBranchId,
+            delta: Number(difference),
+            reason: "TRANSFER_RETURN",
+            refType: "StockTransfer",
+            refId: transferId,
           });
         }
 

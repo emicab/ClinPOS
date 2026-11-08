@@ -85,6 +85,7 @@ export default async function handler(
         });
 
         // Separar el stock del origen para el envío (se repone si se rechaza o cancela)
+        const { applyMovement } = await import('../../../lib/stockService');
         for (const item of items) {
           const qty = parseFloat(item.quantity) || 0;
           if (qty <= 0) {
@@ -92,31 +93,14 @@ export default async function handler(
           }
           const pId = Number(item.productId);
 
-          const sourceStock = await tx.productBranchStock.findUnique({
-            where: {
-              productId_branchId: {
-                productId: pId,
-                branchId: Number(sourceBranchId),
-              },
-            },
-          });
-
-          const currentSourceQty = sourceStock ? sourceStock.quantityStock : 0;
-          if (currentSourceQty < qty) {
-            const product = await tx.product.findUnique({ where: { id: pId }, select: { name: true } });
-            throw new Error(`Stock insuficiente en tu local para "${product?.name || 'el producto'}". Disponible: ${currentSourceQty}, Solicitado: ${qty}.`);
-          }
-
-          await tx.productBranchStock.update({
-            where: {
-              productId_branchId: {
-                productId: pId,
-                branchId: Number(sourceBranchId),
-              },
-            },
-            data: {
-              quantityStock: currentSourceQty - qty,
-            },
+          await applyMovement(tx, {
+            productId: pId,
+            branchId: Number(sourceBranchId),
+            delta: -qty,
+            reason: "TRANSFER_OUT",
+            refType: "StockTransfer",
+            refId: transfer.id,
+            note: `Envío a sucursal ${targetBranchId}`,
           });
         }
 

@@ -1,7 +1,7 @@
 // pages/api/products/[id].ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
-import { resolveTargetBranch, setBranchStock, addBranchStock } from '../../../lib/stockAdjust';
+import { resolveTargetBranch } from '../../../lib/stockAdjust';
 import { Prisma } from '@prisma/client';
 const Decimal = Prisma.Decimal;
 import { handleApiError } from '../../../lib/apiErrorHandler';
@@ -142,6 +142,10 @@ export default async function handler(
 
       let totalStockCalculated = quantityStock !== undefined ? parseFloat(quantityStock) : undefined;
 
+      // Toda escritura de stock pasa por lib/stockService, que mantiene
+      // ProductBranchStock como fuente y recalcula el global como su suma.
+      const { setStock } = await import("../../../lib/stockService");
+
       // [CORREGIDO] Lógica de recálculo de stock por sucursales
       if (branchStocks && (Array.isArray(branchStocks) || typeof branchStocks === 'object')) {
         const items = Array.isArray(branchStocks)
@@ -152,52 +156,51 @@ export default async function handler(
           const bId = parseInt(String(item.branchId ?? item.id));
           const stockVal = parseFloat(String(item.stock ?? item.quantityStock ?? 0));
           if (!isNaN(bId) && !isNaN(stockVal)) {
-            await prisma.productBranchStock.upsert({
-              where: { productId_branchId: { productId: id, branchId: bId } },
-              update: { quantityStock: stockVal },
-              create: { productId: id, branchId: bId, quantityStock: stockVal }
+            const res = await setStock(prisma, {
+              productId: id,
+              branchId: bId,
+              quantity: stockVal,
+              reason: 'PRODUCT_EDIT',
+              refType: 'Product',
+              refId: id,
             });
+            totalStockCalculated = res.productStock;
           }
         }
-        
+
         // Recalcular SIEMPRE desde la BD para no ignorar sucursales excluidas en el payload
-        const totalStockAgg = await prisma.productBranchStock.aggregate({
-          where: { productId: id },
-          _sum: { quantityStock: true }
-        });
-        totalStockCalculated = totalStockAgg._sum.quantityStock ?? 0;
-        
+        const { recalcProductTotal } = await import("../../../lib/stockService");
+        totalStockCalculated = await recalcProductTotal(prisma, id);
+
       } else if (branchId && quantityStock !== undefined) {
         const bId = parseInt(branchId);
         if (!isNaN(bId)) {
-          await prisma.productBranchStock.upsert({
-            where: { productId_branchId: { productId: id, branchId: bId } },
-            update: { quantityStock: parseFloat(quantityStock) },
-            create: { productId: id, branchId: bId, quantityStock: parseFloat(quantityStock) }
+          const res = await setStock(prisma, {
+            productId: id,
+            branchId: bId,
+            quantity: parseFloat(quantityStock),
+            reason: 'PRODUCT_EDIT',
+            refType: 'Product',
+            refId: id,
           });
+          totalStockCalculated = res.productStock;
         }
-        
-        const totalStockAgg = await prisma.productBranchStock.aggregate({
-          where: { productId: id },
-          _sum: { quantityStock: true }
-        });
-        totalStockCalculated = totalStockAgg._sum.quantityStock ?? 0;
+
       } else if (quantityStock !== undefined && !(isRecipe === true || isRecipe === 'true')) {
         // Sin sucursal explícita: la de este equipo (o la Principal). El global
         // se recalcula como suma de sucursales para no quedar desfasado.
         const { branchId: targetBranchId } = await resolveTargetBranch(null);
         const stockVal = parseFloat(quantityStock);
         if (targetBranchId !== null && !isNaN(stockVal)) {
-          await prisma.productBranchStock.upsert({
-            where: { productId_branchId: { productId: id, branchId: targetBranchId } },
-            update: { quantityStock: stockVal },
-            create: { productId: id, branchId: targetBranchId, quantityStock: stockVal }
+          const res = await setStock(prisma, {
+            productId: id,
+            branchId: targetBranchId,
+            quantity: stockVal,
+            reason: 'PRODUCT_EDIT',
+            refType: 'Product',
+            refId: id,
           });
-          const totalStockAgg = await prisma.productBranchStock.aggregate({
-            where: { productId: id },
-            _sum: { quantityStock: true }
-          });
-          totalStockCalculated = totalStockAgg._sum.quantityStock ?? stockVal;
+          totalStockCalculated = res.productStock;
         }
       }
 
@@ -530,33 +533,40 @@ export default async function handler(
     }
     try {
       let touchedBranchStock = false;
+      const { setStock, applyMovement } = await import("../../../lib/stockService");
       if (addValue !== undefined) {
         const requested = parseInt(String(branchId));
         const { branchId: targetBranchId, requestedInvalid } = await resolveTargetBranch(
           isNaN(requested) ? null : requested,
         );
         if (requestedInvalid) return res.status(400).json({ message: 'La sucursal indicada no existe.' });
-        if (targetBranchId !== null) {
-          await addBranchStock(prisma, id, targetBranchId, addValue);
-          touchedBranchStock = true;
-        } else {
-          dataToUpdate.quantityStock = { increment: addValue };
-        }
+        await applyMovement(prisma, {
+          productId: id,
+          branchId: targetBranchId,
+          delta: addValue,
+          reason: 'MANUAL_ADD',
+          refType: 'Product',
+          refId: id,
+        });
+        touchedBranchStock = targetBranchId !== null;
       }
       if (stockValue !== undefined) {
         // El stock global es la suma de las filas por sucursal: se carga sobre la
-        // sucursal pedida, la de este equipo o la Principal (ver lib/stockAdjust).
+        // sucursal pedida, la de este equipo o la Principal (ver lib/stockService).
         const requested = parseInt(String(branchId));
         const { branchId: targetBranchId, requestedInvalid } = await resolveTargetBranch(
           isNaN(requested) ? null : requested,
         );
         if (requestedInvalid) return res.status(400).json({ message: 'La sucursal indicada no existe.' });
-        if (targetBranchId !== null) {
-          await setBranchStock(prisma, id, targetBranchId, stockValue);
-          touchedBranchStock = true;
-        } else {
-          dataToUpdate.quantityStock = stockValue;
-        }
+        await setStock(prisma, {
+          productId: id,
+          branchId: targetBranchId,
+          quantity: stockValue,
+          reason: 'MANUAL_SET',
+          refType: 'Product',
+          refId: id,
+        });
+        touchedBranchStock = targetBranchId !== null;
       }
 
       const updated = await prisma.product.update({

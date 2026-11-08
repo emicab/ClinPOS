@@ -11,13 +11,28 @@ export default async function handler(
   }
 
   try {
+    const { getDeviceBranchId } = await import('../../../lib/branchIdentity');
+    let branchId = await getDeviceBranchId();
+    if (!branchId) {
+      const main = await prisma.branch.findFirst({ where: { isMain: true }, select: { id: true } });
+      branchId = main?.id ?? null;
+    }
+
     // Los elaborados (isRecipe = 1) no se cuentan aquí: se cuentan aparte vía
     // stock derivado (computeDerivedStock). Acá solo productos simples e
     // ingredientes: stock bajo el mínimo o stock 0 aunque no tengan
-    // stockMinAlert configurado.
-    const result: any = await prisma.$queryRawUnsafe(
-      `SELECT COUNT(*) as count FROM Product WHERE isRecipe = 0 AND ((stockMinAlert IS NOT NULL AND quantityStock < stockMinAlert) OR quantityStock <= 0)`
-    );
+    // stockMinAlert configurado. Se usa la sucursal activa.
+    const result: any = branchId
+      ? await prisma.$queryRawUnsafe(
+          `SELECT COUNT(*) as count FROM Product p
+           INNER JOIN ProductBranchStock bs ON bs.productId = p.id
+           WHERE p.isRecipe = 0 AND bs.branchId = ?
+             AND ((p.stockMinAlert IS NOT NULL AND bs.quantityStock < p.stockMinAlert) OR bs.quantityStock <= 0)`,
+          branchId,
+        )
+      : await prisma.$queryRawUnsafe(
+          `SELECT COUNT(*) as count FROM Product WHERE isRecipe = 0 AND ((stockMinAlert IS NOT NULL AND quantityStock < stockMinAlert) OR quantityStock <= 0)`,
+        );
     const count = Number(result[0]?.count || 0);
 
     // Contar elaborados sin disponibilidad (no se pueden preparar).
@@ -29,7 +44,7 @@ export default async function handler(
         select: { id: true, stockMinAlert: true },
       });
       for (const r of recipes) {
-        const derived = await computeDerivedStock(prisma, r.id);
+        const derived = await computeDerivedStock(prisma, r.id, branchId);
         if (derived <= 0 || (r.stockMinAlert !== null && derived < r.stockMinAlert)) {
           recipeAlerts++;
         }

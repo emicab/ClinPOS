@@ -107,9 +107,9 @@ export async function expandRecipeToLeaves(
 }
 
 /**
- * Stock disponible de un ingrediente hoja, con la misma semántica que el POS:
- * si hay sucursal activa y existe registro, usa el stock de sucursal; si no,
- * cae al stock global.
+ * Stock disponible de un ingrediente hoja. Con sucursal activa manda la fila
+ * de esa sucursal: si no existe, el stock es 0 (nunca se cae al global, que es
+ * la suma de todas las sucursales y sobreestimaría la disponibilidad).
  */
 async function getLeafStock(
   db: DB,
@@ -121,7 +121,7 @@ async function getLeafStock(
       where: { productId_branchId: { productId, branchId } },
       select: { quantityStock: true },
     });
-    if (bs) return Number(bs.quantityStock) || 0;
+    return bs ? Number(bs.quantityStock) || 0 : 0;
   }
   const p = await db.product.findUnique({
     where: { id: productId },
@@ -345,12 +345,13 @@ export async function deductRecipeStock(
     return [];
   }
 
+  const { applyMovement } = await import("./stockService");
   const leaves = await expandRecipeToLeaves(db, productId, qty);
   const affected: number[] = [];
   for (const leaf of leaves) {
     const ing = await db.product.findUnique({
       where: { id: leaf.productId },
-      select: { name: true, quantityStock: true, unitType: true },
+      select: { name: true, unitType: true },
     });
     if (!ing) throw new Error(`Ingrediente con ID ${leaf.productId} no encontrado.`);
 
@@ -361,25 +362,15 @@ export async function deductRecipeStock(
       );
     }
 
-    const decremented = await db.product.updateMany({
-      where: { id: leaf.productId, quantityStock: { gte: leaf.quantity } },
-      data: { quantityStock: { decrement: leaf.quantity } },
+    await applyMovement(db, {
+      productId: leaf.productId,
+      branchId: branchId ?? null,
+      delta: -leaf.quantity,
+      reason: "SALE_RECIPE",
+      refType: "Recipe",
+      refId: productId,
+      note: `Consumo de ${product.name}`,
     });
-    if (decremented.count === 0) {
-      throw new Error(
-        `Stock insuficiente del ingrediente "${ing.name}" para preparar "${product.name}" (el stock cambió mientras se procesaba la venta).`,
-      );
-    }
-
-    if (branchId) {
-      await db.productBranchStock.upsert({
-        where: {
-          productId_branchId: { productId: leaf.productId, branchId },
-        },
-        update: { quantityStock: { decrement: leaf.quantity } },
-        create: { productId: leaf.productId, branchId, quantityStock: -leaf.quantity },
-      });
-    }
     affected.push(leaf.productId);
   }
   return affected;
@@ -400,22 +391,19 @@ export async function restoreRecipeStock(
   });
   if (!product || !product.isRecipe) return [];
 
+  const { applyMovement } = await import("./stockService");
   const leaves = await expandRecipeToLeaves(db, productId, qty);
   const affected: number[] = [];
   for (const leaf of leaves) {
-    await db.product.update({
-      where: { id: leaf.productId },
-      data: { quantityStock: { increment: leaf.quantity } },
+    await applyMovement(db, {
+      productId: leaf.productId,
+      branchId: branchId ?? null,
+      delta: leaf.quantity,
+      reason: "SALE_CANCEL_RECIPE",
+      refType: "Recipe",
+      refId: productId,
+      note: "Reposición por anulación de venta",
     });
-    if (branchId) {
-      await db.productBranchStock.upsert({
-        where: {
-          productId_branchId: { productId: leaf.productId, branchId },
-        },
-        update: { quantityStock: { increment: leaf.quantity } },
-        create: { productId: leaf.productId, branchId, quantityStock: leaf.quantity },
-      });
-    }
     affected.push(leaf.productId);
   }
   return affected;

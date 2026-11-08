@@ -61,6 +61,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       // El stock sale de la sucursal de este equipo (o la Principal).
       const consignmentBranchId = (await resolveTargetBranch(null)).branchId;
+      const { getBranchStock } = await import('../../../lib/stockService');
       const result = await prisma.$transaction(async (tx) => {
         // 1. Verificar y descontar stock de cada producto entregado
         for (const item of items) {
@@ -68,12 +69,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           if (!product) {
             throw new Error(`Producto con ID ${item.productId} no encontrado.`);
           }
-          if (product.quantityStock < item.quantityGiven) {
-            throw new Error(`Stock insuficiente para "${product.name}". Disponible: ${product.quantityStock}, Solicitado: ${item.quantityGiven}.`);
+          const available = consignmentBranchId !== null
+            ? ((await getBranchStock(tx, item.productId, consignmentBranchId)) ?? 0)
+            : Number(product.quantityStock) || 0;
+          if (available < item.quantityGiven) {
+            throw new Error(`Stock insuficiente para "${product.name}". Disponible: ${available}, Solicitado: ${item.quantityGiven}.`);
           }
 
           // Descontar del stock local (pasa a estar entregado en consignación)
-          await incrementStock(tx, item.productId, -Number(item.quantityGiven), consignmentBranchId);
+          await incrementStock(
+            tx,
+            item.productId,
+            -Number(item.quantityGiven),
+            consignmentBranchId,
+            'CONSIGNMENT_OUT',
+          );
         }
 
         // 2. Crear registro de Consignación

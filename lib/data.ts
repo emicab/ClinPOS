@@ -49,9 +49,34 @@ export async function getCategoryCount() {
 // Podríamos añadir más aquí, como "productos con stock bajo", etc.
 export async function getLowStockProductCount() {
     try {
-        // Incluye stock bajo el mínimo configurado y stock 0 sin mínimo.
-        // Los elaborados (isRecipe) tienen stock 0 por diseño, así que solo
-        // entran por stockMinAlert si lo tienen configurado.
+        // Bajo stock de la sucursal activa (el global es la suma de sucursales
+        // y puede ocultar que un local se quedó sin stock).
+        const { getDeviceBranchId } = await import("./branchIdentity");
+        let branchId = await getDeviceBranchId();
+        if (!branchId) {
+            const main = await prisma.branch.findFirst({ where: { isMain: true }, select: { id: true } });
+            branchId = main?.id ?? null;
+        }
+
+        if (branchId) {
+            // Incluye stock bajo el mínimo configurado y stock 0 sin mínimo.
+            // Los elaborados (isRecipe) tienen stock 0 por diseño, así que solo
+            // entran por stockMinAlert si lo tienen configurado.
+            const result = await prisma.$queryRaw<any[]>`
+                SELECT COUNT(*) as count
+                FROM Product p
+                INNER JOIN ProductBranchStock bs ON bs.productId = p.id
+                WHERE bs.branchId = ${branchId}
+                  AND (
+                    (p.stockMinAlert IS NOT NULL AND bs.quantityStock < p.stockMinAlert)
+                    OR (bs.quantityStock <= 0 AND p.isRecipe = 0)
+                  )
+            `;
+            const count = result[0]?.count;
+            return typeof count === 'bigint' ? Number(count) : (Number(count) || 0);
+        }
+
+        // Instalación sin sucursales: se usa el stock global.
         const result = await prisma.$queryRaw<any[]>`
             SELECT COUNT(*) as count FROM Product
             WHERE (stockMinAlert IS NOT NULL AND quantityStock < stockMinAlert)

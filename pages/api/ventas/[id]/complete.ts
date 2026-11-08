@@ -139,41 +139,24 @@ export default async function handler(
           continue;
         }
 
-        if (Number(product.quantityStock) < Number(item.quantity)) {
-          throw new Error(`Stock insuficiente para el producto "${product.name}". Disponible: ${product.quantityStock}, Solicitado: ${item.quantity}.`);
+        const { applyMovement, getBranchStock } = await import("../../../../lib/stockService");
+        // Validar contra el stock de la sucursal de la venta, no contra el global.
+        const available = sale.branchId
+          ? ((await getBranchStock(tx, item.productId, sale.branchId)) ?? 0)
+          : Number(product.quantityStock) || 0;
+        if (available < Number(item.quantity)) {
+          throw new Error(`Stock insuficiente para el producto "${product.name}". Disponible: ${available}, Solicitado: ${item.quantity}.`);
         }
 
-        const updateResult = await tx.product.updateMany({
-          where: {
-            id: item.productId,
-            quantityStock: { gte: Number(item.quantity) }
-          },
-          data: {
-            quantityStock: { decrement: Number(item.quantity) }
-          }
+        await applyMovement(tx, {
+          productId: item.productId,
+          branchId: sale.branchId ?? null,
+          delta: -Number(item.quantity),
+          reason: "SALE",
+          refType: "Sale",
+          refId: sale.id,
+          note: product.name,
         });
-        if (updateResult.count === 0) {
-          throw new Error(`Stock insuficiente o modificado concurrentemente para el producto "${product.name}".`);
-        }
-
-        if (sale.branchId) {
-          await tx.productBranchStock.upsert({
-            where: {
-              productId_branchId: {
-                productId: item.productId,
-                branchId: sale.branchId,
-              },
-            },
-            update: {
-              quantityStock: { decrement: Number(item.quantity) },
-            },
-            create: {
-              productId: item.productId,
-              branchId: sale.branchId,
-              quantityStock: -Number(item.quantity),
-            },
-          });
-        }
       }
 
       const updatedSale = await tx.sale.update({

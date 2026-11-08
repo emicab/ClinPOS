@@ -200,35 +200,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
             }
             if (currentReserveBranchId && currentReserveBranchId !== newBranchId) {
               // Devolver la reserva provisoria a la sucursal que la tenía
-              await tx.productBranchStock.upsert({
-                where: {
-                  productId_branchId: {
-                    productId: item.productId,
-                    branchId: currentReserveBranchId,
-                  },
-                },
-                update: { quantityStock: { increment: qty } },
-                create: {
-                  productId: item.productId,
-                  branchId: currentReserveBranchId,
-                  quantityStock: qty,
-                },
+              const { applyMovement } = await import("../../../lib/stockService");
+              await applyMovement(tx, {
+                productId: item.productId,
+                branchId: currentReserveBranchId,
+                delta: qty,
+                reason: "WEB_ORDER_MOVE_OUT",
+                refType: "WebOrder",
+                refId: currentOrder.id,
               });
             }
             // Reservar en la nueva sucursal de despacho
-            await tx.productBranchStock.upsert({
-              where: {
-                productId_branchId: {
-                  productId: item.productId,
-                  branchId: newBranchId,
-                },
-              },
-              update: { quantityStock: { decrement: qty } },
-              create: {
-                productId: item.productId,
-                branchId: newBranchId,
-                quantityStock: -qty,
-              },
+            const { applyMovement } = await import("../../../lib/stockService");
+            await applyMovement(tx, {
+              productId: item.productId,
+              branchId: newBranchId,
+              delta: -qty,
+              reason: "WEB_ORDER_MOVE_IN",
+              refType: "WebOrder",
+              refId: currentOrder.id,
+              allowNegative: true,
             });
           }
         }
@@ -242,26 +233,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               await restoreRecipeStock(tx, item.productId, Number(item.quantity), currentReserveBranchId);
               continue;
             }
-            await tx.product.update({
-              where: { id: item.productId },
-              data: { quantityStock: { increment: Number(item.quantity) } },
+            const { applyMovement } = await import("../../../lib/stockService");
+            await applyMovement(tx, {
+              productId: item.productId,
+              branchId: currentReserveBranchId ?? null,
+              delta: Number(item.quantity),
+              reason: "WEB_ORDER_CANCEL",
+              refType: "WebOrder",
+              refId: currentOrder.id,
             });
-            if (currentReserveBranchId) {
-              await tx.productBranchStock.upsert({
-                where: {
-                  productId_branchId: {
-                    productId: item.productId,
-                    branchId: currentReserveBranchId,
-                  },
-                },
-                update: { quantityStock: { increment: Number(item.quantity) } },
-                create: {
-                  productId: item.productId,
-                  branchId: currentReserveBranchId,
-                  quantityStock: Number(item.quantity),
-                },
-              });
-            }
           }
         } else if (isUncancelling) {
           for (const item of currentOrder.items) {
@@ -270,26 +250,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
               await deductRecipeStock(tx, item.productId, Number(item.quantity), currentReserveBranchId);
               continue;
             }
-            await tx.product.update({
-              where: { id: item.productId },
-              data: { quantityStock: { decrement: Number(item.quantity) } },
+            const { applyMovement } = await import("../../../lib/stockService");
+            await applyMovement(tx, {
+              productId: item.productId,
+              branchId: currentReserveBranchId ?? null,
+              delta: -Number(item.quantity),
+              reason: "WEB_ORDER_RESTORE",
+              refType: "WebOrder",
+              refId: currentOrder.id,
+              allowNegative: true,
             });
-            if (currentReserveBranchId) {
-              await tx.productBranchStock.upsert({
-                where: {
-                  productId_branchId: {
-                    productId: item.productId,
-                    branchId: currentReserveBranchId,
-                  },
-                },
-                update: { quantityStock: { decrement: Number(item.quantity) } },
-                create: {
-                  productId: item.productId,
-                  branchId: currentReserveBranchId,
-                  quantityStock: -Number(item.quantity),
-                },
-              });
-            }
           }
         }
 
