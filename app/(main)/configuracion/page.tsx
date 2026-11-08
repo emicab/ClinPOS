@@ -26,7 +26,7 @@ import { ShoppingBag, Store, Lock } from "lucide-react";
 
 
 export default function ConfiguracionPage() {
-  const { refresh: refreshModules, plan, currentUser } = useModules();
+  const { refresh: refreshModules, plan, currentUser, cloudSyncEnabled } = useModules();
   // El ADMIN accede a todas las pestañas sin restricción de plan.
   const isAdmin = currentUser?.role === "ADMIN";
   const [form, setForm] = useState<Record<string, string>>({});
@@ -70,15 +70,23 @@ export default function ConfiguracionPage() {
     if (!pendingTab) return;
     const validTabs = ["general", "sucursales", "tienda_web", "promociones_tarjetas", "usuarios", "backup", "arca", "suscripciones"];
     if (!validTabs.includes(pendingTab)) return;
+    if (pendingTab === "tienda_web" && !cloudSyncEnabled) {
+      setActiveTab("general");
+      return;
+    }
     const proTabs = ["sucursales", "tienda_web"];
     if (proTabs.includes(pendingTab) && !isPlanPro) {
       setActiveTab("general");
     } else {
       setActiveTab(pendingTab as any);
     }
-  }, [pendingTab, isPlanPro]);
+  }, [pendingTab, isPlanPro, cloudSyncEnabled]);
 
   const handleTabClick = (tab: "general" | "sucursales" | "tienda_web" | "promociones_tarjetas" | "usuarios" | "backup" | "arca" | "suscripciones") => {
+    if (tab === "tienda_web" && !cloudSyncEnabled) {
+      toast.error("La tienda web está desactivada en modo local.");
+      return;
+    }
     if ((tab === "sucursales" || tab === "tienda_web") && !isPlanPro) {
       toast.error("Esta sección requiere el plan Pro.");
       return;
@@ -193,6 +201,7 @@ export default function ConfiguracionPage() {
           <Store size={16} /> Locales y Sucursales {!isPlanPro && <Lock size={13} className="text-foreground-muted" />}
         </button>
 
+        {cloudSyncEnabled && (
         <button
           onClick={() => handleTabClick("tienda_web")}
           className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors shrink-0 cursor-pointer ${
@@ -203,6 +212,7 @@ export default function ConfiguracionPage() {
         >
           <ShoppingBag size={16} /> Tienda ClinStore (Web) {!isPlanPro && <Lock size={13} className="text-foreground-muted" />}
         </button>
+        )}
 
         <button
           onClick={() => setActiveTab("promociones_tarjetas")}
@@ -293,6 +303,7 @@ export default function ConfiguracionPage() {
           handleManualSync={handleManualSync}
           isSyncing={isSyncing}
           isPlanPro={isPlanPro}
+          cloudSyncEnabled={cloudSyncEnabled}
         />
       )}
 

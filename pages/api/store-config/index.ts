@@ -4,6 +4,7 @@ import prisma from '../../../lib/prisma';
 import { handleApiError } from '../../../lib/apiErrorHandler';
 import { sanitizeString } from '../../../lib/sanitize';
 import { isMainDevice, isProDevice } from '../../../lib/branchIdentity';
+import { isCloudSyncEnabled } from '../../../lib/cloudPolicy';
 import { resolveDbForRequest } from '../../../lib/requestDb';
 import { Prisma } from '@prisma/client';
 
@@ -292,7 +293,11 @@ export default async function handler(
       // que un sync en curso re-subiera el token desde un local desactualizado.
       // Si el token de MP pasó de no-vacío a vacío, propagar el borrado a la
       // nube usando PATCH para una actualización parcial segura.
-      if (existingConfig?.mpAccessToken && !result.mpAccessToken) {
+      if (
+        (await isCloudSyncEnabled()) &&
+        existingConfig?.mpAccessToken &&
+        !result.mpAccessToken
+      ) {
         try {
           const { getSelectiveSyncCredentials } = await import("../../../lib/syncService");
           const { supabaseUrl, supabaseKey, tenantId } = await getSelectiveSyncCredentials();

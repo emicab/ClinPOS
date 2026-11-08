@@ -2,9 +2,21 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { runSupabaseSync } from "../../../lib/syncService";
 import { isProDevice } from "../../../lib/branchIdentity";
+import { isCloudSyncEnabled } from "../../../lib/cloudPolicy";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method === "POST" || req.method === "GET") {
+    // Modo local: la nube está apagada y no se debe tocar Supabase.
+    if (!(await isCloudSyncEnabled())) {
+      res.status(200).json({
+        success: true,
+        localMode: true,
+        pendingSync: 0,
+        message: "Modo local activo: la sincronización con la nube está desactivada.",
+      });
+      return;
+    }
+
     // La sincronización en la nube es exclusiva del Plan Pro.
     if (!(await isProDevice())) {
       res.status(403).json({ message: "La sincronización en la nube requiere el Plan Pro.", blockedByPlan: true });

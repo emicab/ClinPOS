@@ -3,6 +3,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getPendingCount } from "../../../lib/syncOutbox";
 import prisma from "../../../lib/prisma";
+import { isCloudSyncEnabled } from "../../../lib/cloudPolicy";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
@@ -11,6 +12,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
+    // Modo local: sin pendientes, conflictos ni avisos de nube, aunque la cola
+    // histórica todavía tenga filas.
+    if (!(await isCloudSyncEnabled())) {
+      return res.status(200).json({
+        pendingSync: 0,
+        cloudBlocked: false,
+        failedSync: 0,
+        openConflicts: 0,
+        pendingBreakdown: [],
+        lastSync: "",
+        isPro: false,
+        localMode: true,
+      });
+    }
+
     const [pendingSync, lastSyncSetting, planSetting, failedSync, openConflicts, pendingBreakdown] = await Promise.all([
       getPendingCount(),
       prisma.setting.findUnique({ where: { key: "supabase_last_sync" } }),

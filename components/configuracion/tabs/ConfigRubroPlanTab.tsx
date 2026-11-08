@@ -27,7 +27,7 @@ export default function ConfigRubroPlanTab({
   handleSave,
   isSaving,
 }: ConfigRubroPlanTabProps) {
-  const { refresh: refreshModules } = useModules();
+  const { refresh: refreshModules, cloudSyncEnabled } = useModules();
   const [licenseKeyInput, setLicenseKeyInput] = useState("");
   const [activatingLicense, setActivatingLicense] = useState(false);
   const [pairingCodeInput, setPairingCodeInput] = useState("");
@@ -56,16 +56,18 @@ export default function ConfigRubroPlanTab({
       setPairingCodeInput("");
       toast.success(data.message || "¡Sucursal conectada!");
 
-      toast.loading("Descargando datos desde la nube...", { id: "pairing-sync-toast" });
-      try {
-        const syncRes = await fetch("/api/sync?force=true");
-        if (syncRes.ok) {
-          toast.success("¡Datos descargados! El local está listo.", { id: "pairing-sync-toast" });
-        } else {
-          toast.error("Los datos se descargarán automáticamente. Revisá Configuración → Sucursales.", { id: "pairing-sync-toast" });
+      if (cloudSyncEnabled) {
+        toast.loading("Descargando datos desde la nube...", { id: "pairing-sync-toast" });
+        try {
+          const syncRes = await fetch("/api/sync?force=true");
+          if (syncRes.ok) {
+            toast.success("¡Datos descargados! El local está listo.", { id: "pairing-sync-toast" });
+          } else {
+            toast.error("Los datos se descargarán automáticamente. Revisá Configuración → Sucursales.", { id: "pairing-sync-toast" });
+          }
+        } catch {
+          toast.error("No se pudo sincronizar automáticamente.", { id: "pairing-sync-toast" });
         }
-      } catch {
-        toast.error("No se pudo sincronizar automáticamente.", { id: "pairing-sync-toast" });
       }
 
       await refreshModules();
@@ -105,17 +107,19 @@ export default function ConfigRubroPlanTab({
         handleChange("storage_mode", activePlan === "pro" ? "seguro" : "local");
         setLicenseKeyInput("");
         await handleSave();
-        
-        toast.loading("Descargando sucursales y productos desde la nube...", { id: "sync-toast" });
-        try {
-          const syncRes = await fetch("/api/sync?force=true");
-          if (syncRes.ok) {
-            toast.success("¡Datos descargados con éxito! El local está listo.", { id: "sync-toast" });
-          } else {
-            toast.error("Hubo un problema al sincronizar los datos. Intentá desde Configuración -> Sucursales.", { id: "sync-toast" });
+
+        if (cloudSyncEnabled) {
+          toast.loading("Descargando sucursales y productos desde la nube...", { id: "sync-toast" });
+          try {
+            const syncRes = await fetch("/api/sync?force=true");
+            if (syncRes.ok) {
+              toast.success("¡Datos descargados con éxito! El local está listo.", { id: "sync-toast" });
+            } else {
+              toast.error("Hubo un problema al sincronizar los datos. Intentá desde Configuración -> Sucursales.", { id: "sync-toast" });
+            }
+          } catch (e) {
+            toast.error("No se pudo conectar para sincronizar automáticamente.", { id: "sync-toast" });
           }
-        } catch (e) {
-          toast.error("No se pudo conectar para sincronizar automáticamente.", { id: "sync-toast" });
         }
 
         await refreshModules();
@@ -237,7 +241,7 @@ export default function ConfigRubroPlanTab({
             <div className="space-y-3">
               <div className="flex justify-between items-center">
                 <span className="text-xs font-black uppercase tracking-wider text-amber-600 bg-amber-100 dark:bg-amber-950 dark:text-amber-300 px-2.5 py-1 rounded-lg">
-                  Plan Pro Nube
+                  Plan Pro
                 </span>
                 {currentPlan === "pro" && (
                   <span className="text-xs font-bold text-amber-600 flex items-center gap-1">
@@ -246,11 +250,11 @@ export default function ConfigRubroPlanTab({
                 )}
               </div>
               <h3 className="text-xl font-bold text-foreground">
-                Pro & Respaldo en la Nube
+                Pro & Módulos Avanzados
               </h3>
               <p className="text-xs text-foreground-muted">
                 Para negocios que necesitan cobro a crédito/fiado, analíticas
-                financieras profundas y sincronización automática.
+                financieras profundas y herramientas avanzadas de gestión.
               </p>
 
               <div className="pt-2">
@@ -274,7 +278,7 @@ export default function ConfigRubroPlanTab({
                   ⭐ Cuenta Corriente / Fiado
                 </li>
                 <li className="flex items-center gap-2 font-bold text-amber-600">
-                  ⭐ Respaldo Automático en Nube
+                  ⭐ Copia de Seguridad Automática Local
                 </li>
                 <li className="flex items-center gap-2 font-bold text-amber-600">
                   ⭐ Analíticas Avanzadas
@@ -332,7 +336,8 @@ export default function ConfigRubroPlanTab({
           </form>
         </div>
 
-        {/* Conectar Sucursal con Código de Emparejamiento */}
+        {/* Conectar Sucursal con Código de Emparejamiento (requiere nube) */}
+        {cloudSyncEnabled && (
         <div className="p-5 bg-background border border-emerald-500/40 rounded-xl space-y-3">
           <div className="flex items-center gap-2">
             <Key size={18} className="text-emerald-600" />
@@ -367,6 +372,7 @@ export default function ConfigRubroPlanTab({
             </Button>
           </form>
         </div>
+        )}
       </section>
 
       <div className="flex justify-end">

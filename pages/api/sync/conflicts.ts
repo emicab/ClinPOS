@@ -1,8 +1,17 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import prisma from "../../../lib/prisma";
+import { isCloudSyncEnabled } from "../../../lib/cloudPolicy";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
+    // Modo local: no hay conflictos de nube que resolver.
+    if (!(await isCloudSyncEnabled())) {
+      if (req.method === "GET") {
+        return res.status(200).json({ conflicts: [], localMode: true });
+      }
+      return res.status(200).json({ ok: false, localMode: true, message: "Modo local activo: no hay conflictos de nube." });
+    }
+
     if (req.method === "PATCH") {
       const id = Number(req.body?.id);
       const resolution = String(req.body?.resolution || "");

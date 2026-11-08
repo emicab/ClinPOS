@@ -16,8 +16,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const id = parseInt(productIdQuery);
 
   try {
-    const { pullSingleProductStock } = await import('../../../../lib/syncService');
-    const ok = await pullSingleProductStock(id);
+    const { isCloudSyncEnabled } = await import('../../../../lib/cloudPolicy');
+    // Modo local: no se baja nada de la nube; se devuelve el producto local.
+    const ok = (await isCloudSyncEnabled())
+      ? await (await import('../../../../lib/syncService')).pullSingleProductStock(id)
+      : false;
 
     const product = await prisma.product.findUnique({
       where: { id },

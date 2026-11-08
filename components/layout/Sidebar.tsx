@@ -290,6 +290,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
     supabaseLastSync,
     hasSupabaseConfig,
     storageMode,
+    cloudSyncEnabled,
     plan,
     hasRolePermission,
     businessProfile,
@@ -365,6 +366,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
   // Alertas urgentes: pedidos web rechazados por stock insuficiente.
   // Poll cada 5 min (antes 60s): cada poll pega a Supabase aunque no haya nada.
   useEffect(() => {
+    if (!cloudSyncEnabled) return;
     const fetchWebOrderAlerts = async () => {
       try {
         const res = await fetch("/api/web-order-alerts");
@@ -386,11 +388,12 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
     fetchWebOrderAlerts();
     const interval = setInterval(fetchWebOrderAlerts, 300000);
     return () => clearInterval(interval);
-  }, []);
+  }, [cloudSyncEnabled]);
 
   // Pedidos web EN REVISIÓN por falta de stock local (Regla de Oro: el cliente
   // físico gana la última unidad). Avisa al comerciante para que decida.
   useEffect(() => {
+    if (!cloudSyncEnabled) return;
     const fetchReviewAlerts = async () => {
       try {
         const res = await fetch("/api/web-orders/review-alerts");
@@ -417,7 +420,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
     fetchReviewAlerts();
     const interval = setInterval(fetchReviewAlerts, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [cloudSyncEnabled]);
 
   const toggleGroup = (title: string) => {
     setCollapsedGroups((prev) => {
@@ -587,6 +590,8 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
     .map((group) => {
       const processedItems = group.items
         .map((item) => {
+          // Módulos que dependen de la nube: ocultos en modo local (incluso admin).
+          if (!cloudSyncEnabled && item.moduleId === "pedidos_web") return null;
           if (isAdmin) return { ...item, isLocked: false };
           const isEnabled = !item.moduleId || isModuleEnabled(item.moduleId);
           const isProFeature = [
@@ -739,6 +744,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
           </div>
         )}
 
+        {cloudSyncEnabled && (
         <div
           className="mx-4 mb-2 px-3 py-2 rounded-xl border border-border bg-background/50 flex items-center justify-between gap-2"
           title={openConflicts > 0 ? `${openConflicts} conflicto(s) requieren revisión` : lastSync ? `Última sincronización: ${lastSync}` : "Sincronización con la nube"}
@@ -782,6 +788,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
             )}
           </div>
         </div>
+        )}
 
         {currentUser && (
           <div className="px-4 py-2.5 border-t border-border flex items-center justify-between text-xs bg-background/50">
@@ -847,7 +854,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
               Actualizar
             </button>
           </div>
-          {plan === "pro" && storageMode === "safe" && (
+          {cloudSyncEnabled && plan === "pro" && storageMode === "safe" && (
             <div className="flex items-center justify-center gap-1.5 text-[9px] text-foreground-muted/70 font-semibold mb-1">
               <span
                 className={`h-1.5 w-1.5 rounded-full ${

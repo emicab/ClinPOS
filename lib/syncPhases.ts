@@ -5,12 +5,15 @@
 // funciones para no crear ciclos ni chunks rotos en dev.
 import prisma from "./prisma";
 import { isProDevice } from "./branchIdentity";
+import { isCloudSyncEnabled } from "./cloudPolicy";
 import { isCloudNewer, recordSyncConflict } from "./syncConflict";
 
 const fmtDec = (val: any, fallback: string | null = "0.00") => (val !== undefined && val !== null ? val.toString() : fallback);
 
-// El respaldo/sincronización en la nube es exclusivo del Plan Pro.
+// La nube solo se usa si el modo local está apagado Y el equipo tiene Plan Pro.
+// El flag `cloud_sync_enabled` manda: apagado (default) = 100% local.
 export async function isCloudAllowed(): Promise<boolean> {
+  if (!(await isCloudSyncEnabled())) return false;
   const allowed = await isProDevice();
   if (!allowed) {
     console.warn("[Sync] Sincronización en la nube omitida: requiere el Plan Pro.");

@@ -18,9 +18,11 @@ import {
 import Button from "@/components/ui/Button";
 import Input from "@/components/ui/Input";
 import toast from "react-hot-toast";
+import { useModules } from "@/hooks/useModules";
 import type { Branch } from "@/types";
 
 export default function ConfigSucursalesTab() {
+  const { cloudSyncEnabled } = useModules();
   const [branches, setBranches] = useState<Branch[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -313,13 +315,12 @@ export default function ConfigSucursalesTab() {
             </h3>
           </div>
           <span className="text-xs bg-amber-500/10 text-amber-600 dark:text-amber-400 px-2.5 py-0.5 rounded-full font-bold uppercase">
-            Vínculo Multi-Local
+            Licencia del Equipo
           </span>
         </div>
         <p className="text-xs text-foreground-muted">
-          Al activar tu otro local en la segunda PC con esta **misma Clave de
-          Activación del Plan**, ambas computadoras se conectarán a la misma
-          base de datos en tiempo real para compartir productos, ventas y stock.
+          La licencia habilita los módulos Pro en este equipo. Las ventas,
+          productos y el stock se guardan de forma local en esta computadora.
         </p>
         <div className="flex items-center gap-2 bg-background p-3 rounded-xl border border-border">
           <code className="text-sm font-mono font-bold text-primary flex-1 truncate">
@@ -336,8 +337,8 @@ export default function ConfigSucursalesTab() {
         </div>
       </div>
 
-      {/* Conectar nueva sucursal (solo Casa Central) */}
-      {isMainDevice && (
+      {/* Conectar nueva sucursal (solo Casa Central y solo si la nube está activa) */}
+      {cloudSyncEnabled && isMainDevice && (
         <div className="bg-white p-5 rounded-2xl border border-border space-y-3">
           <div className="flex items-center gap-2">
             <Key className="text-emerald-600 shrink-0" size={20} />

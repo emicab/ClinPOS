@@ -18,6 +18,7 @@ export const DEVICE_GLOBAL_KEYS = [
   'plan_type',
   'unlocked_plan_pro',
   'storage_mode',
+  'cloud_sync_enabled',
   'supabase_url',
   'supabase_anon_key',
   'supabase_service_role_key',
