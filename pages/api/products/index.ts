@@ -7,6 +7,7 @@ const Decimal = Prisma.Decimal;
 import { handleApiError } from '../../../lib/apiErrorHandler';
 import { sanitizeString } from '../../../lib/sanitize';
 import { resolveDbForRequest } from '../../../lib/requestDb';
+import { resolveTargetBranch } from '../../../lib/stockAdjust';
 
 export default async function handler(
   req: NextApiRequest,
@@ -198,11 +199,17 @@ export default async function handler(
             // Sin skipDuplicates (no existe en SQLite): `missing` ya viene
             // filtrado en memoria, y la carrera residual cae en el catch.
             await db.productBranchStock.createMany({
-              data: missing.map((p: any) => ({
-                productId: p.id,
-                branchId: parsedBranchId as number,
-                quantityStock: branchIsMain ? Number(p.quantityStock) || 0 : 0,
-              })),
+              data: missing.map((p: any) => {
+                // Solo una instalación legacy (sin ninguna fila) puede heredar
+                // el global a la Principal. Si ya hay filas en otra sucursal,
+                // copiar el global duplicaría la suma (el global ES la suma).
+                const hasRows = Array.isArray(p.branchStocks) && p.branchStocks.length > 0;
+                return {
+                  productId: p.id,
+                  branchId: parsedBranchId as number,
+                  quantityStock: branchIsMain && !hasRows ? Number(p.quantityStock) || 0 : 0,
+                };
+              }),
             });
             const rows = await db.productBranchStock.findMany({
               where: {
@@ -330,11 +337,14 @@ export default async function handler(
     const resolvedUnitType = validUnitTypes.includes(unitType) ? (unitType || null) : null;
 
     try {
-      // Determinar la sucursal para asignar el stock inicial
-      let targetBranchId: number | null = req.body.branchId ? parseInt(req.body.branchId) : null;
-      if (!targetBranchId || isNaN(targetBranchId)) {
-        const mainBranch = await prisma.branch.findFirst({ where: { isMain: true } });
-        targetBranchId = mainBranch?.id || null;
+      // Determinar la sucursal para asignar el stock inicial: la pedida, la de
+      // este equipo o la Principal (misma regla que el resto de las escrituras).
+      const requestedBranch = req.body.branchId ? parseInt(req.body.branchId) : NaN;
+      const { branchId: targetBranchId, requestedInvalid } = await resolveTargetBranch(
+        isNaN(requestedBranch) ? null : requestedBranch,
+      );
+      if (requestedInvalid) {
+        return res.status(400).json({ message: 'La sucursal indicada no existe.' });
       }
 
       const newProduct = await prisma.product.create({
@@ -345,7 +355,8 @@ export default async function handler(
           imageUrl: imageUrl ? imageUrl.trim() : null,
           pricePurchase: pricePurchaseDecimal || new Decimal(0),
           priceSale: new Decimal(priceSaleNum),
-          quantityStock: isRecipeProduct ? 0 : quantityStockNum,
+          // El stock inicial se escribe después, por sucursal y con ledger.
+          quantityStock: 0,
           stockMinAlert: stockMinAlert ? parseFloat(stockMinAlert) : null,
           unitType: resolvedUnitType,
           // Default oculto: nada se publica en la tienda web sin decisión explícita.
@@ -366,11 +377,15 @@ export default async function handler(
       });
 
       // Stock inicial por sucursal (los elaborados no tienen stock físico propio).
-      if (targetBranchId && !isRecipeProduct) {
-        await prisma.productBranchStock.upsert({
-          where: { productId_branchId: { productId: newProduct.id, branchId: targetBranchId } },
-          update: { quantityStock: quantityStockNum },
-          create: { productId: newProduct.id, branchId: targetBranchId, quantityStock: quantityStockNum },
+      if (!isRecipeProduct) {
+        const { setStock } = await import("../../../lib/stockService");
+        await setStock(prisma, {
+          productId: newProduct.id,
+          branchId: targetBranchId,
+          quantity: quantityStockNum,
+          reason: 'PRODUCT_CREATE',
+          refType: 'Product',
+          refId: newProduct.id,
         });
       }
 

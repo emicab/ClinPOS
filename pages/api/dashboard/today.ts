@@ -37,11 +37,25 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   // Productos bajo mínimo (misma regla que /api/products/alert-count, sin
-  // el loop de recetario para mantenerlo barato).
+  // el loop de recetario para mantenerlo barato). Se evalúa la sucursal activa.
   try {
-    const rows: any = await prisma.$queryRawUnsafe(
-      `SELECT COUNT(*) as count FROM Product WHERE isRecipe = 0 AND ((stockMinAlert IS NOT NULL AND quantityStock < stockMinAlert) OR quantityStock <= 0)`
-    );
+    const { getDeviceBranchId } = await import('../../../lib/branchIdentity');
+    let branchId = await getDeviceBranchId();
+    if (!branchId) {
+      const main = await prisma.branch.findFirst({ where: { isMain: true }, select: { id: true } });
+      branchId = main?.id ?? null;
+    }
+    const rows: any = branchId
+      ? await prisma.$queryRawUnsafe(
+          `SELECT COUNT(*) as count FROM Product p
+           INNER JOIN ProductBranchStock bs ON bs.productId = p.id
+           WHERE p.isRecipe = 0 AND bs.branchId = ?
+             AND ((p.stockMinAlert IS NOT NULL AND bs.quantityStock < p.stockMinAlert) OR bs.quantityStock <= 0)`,
+          branchId,
+        )
+      : await prisma.$queryRawUnsafe(
+          `SELECT COUNT(*) as count FROM Product WHERE isRecipe = 0 AND ((stockMinAlert IS NOT NULL AND quantityStock < stockMinAlert) OR quantityStock <= 0)`,
+        );
     out.lowStock = Number(rows[0]?.count || 0);
   } catch {
     // ignore

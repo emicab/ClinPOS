@@ -102,7 +102,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
           // 2. Reingresar productos devueltos al stock
           if (qReturned > 0) {
-            await incrementStock(tx, cItem.productId, qReturned, consignmentBranchId);
+            await incrementStock(tx, cItem.productId, qReturned, consignmentBranchId, 'CONSIGNMENT_RETURN');
           }
 
           // 3. Acumular venta por lo vendido
@@ -267,7 +267,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         for (const item of consignment.items) {
           const pendingQty = item.quantityGiven - item.quantityReturned - item.quantitySold;
           if (pendingQty > 0) {
-            await incrementStock(tx, item.productId, pendingQty, consignmentBranchId);
+            await incrementStock(tx, item.productId, pendingQty, consignmentBranchId, 'CONSIGNMENT_CANCEL');
           }
         }
 

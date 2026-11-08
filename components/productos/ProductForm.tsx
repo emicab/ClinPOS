@@ -283,18 +283,8 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialProductData }) => {
   useEffect(() => {
     if (initialProductData) {
       const refreshAndLoad = async () => {
-        let dataToUse = initialProductData;
-        try {
-          const res = await fetch(`/api/products/${initialProductData.id}/sync-pull`, { method: 'POST' });
-          if (res.ok) {
-            const body = await res.json();
-            if (body.product) {
-              dataToUse = body.product;
-            }
-          }
-        } catch {
-          // Si falla el sync express (ej: offline), continuamos con los datos locales
-        }
+        // Modo local: siempre se usan los datos locales (sin pull a la nube).
+        const dataToUse = initialProductData;
 
         let initialStock = dataToUse.quantityStock;
         if (typeof window !== "undefined") {
@@ -354,6 +344,20 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialProductData }) => {
     const activeBranchIdStr = typeof window !== 'undefined' ? localStorage.getItem("clinpos_active_branch_id") : null;
     const activeBranchId = activeBranchIdStr ? parseInt(activeBranchIdStr) : null;
 
+    // Editar un producto no debe tocar el stock salvo que el usuario lo cambie.
+    const currentStock = isRecipe ? 0 : parseFloat(formData.quantityStock);
+    let stockChanged = !initialProductData;
+    if (initialProductData) {
+      let originalStock = Number(initialProductData.quantityStock) || 0;
+      if (activeBranchIdStr && (initialProductData as any).branchStocks) {
+        const bs = (initialProductData as any).branchStocks.find(
+          (b: any) => b.branchId === Number(activeBranchIdStr),
+        );
+        originalStock = bs ? Number(bs.quantityStock) || 0 : 0;
+      }
+      stockChanged = !isRecipe && Math.abs(currentStock - originalStock) > 0.0001;
+    }
+
     const dataToSend = {
         branchId: activeBranchId,
         name: formData.name,
@@ -362,7 +366,7 @@ const ProductForm: React.FC<ProductFormProps> = ({ initialProductData }) => {
         imageUrl: formData.imageUrl || null,
         pricePurchase: formData.pricePurchase ? parseFloat(formData.pricePurchase) : null,
         priceSale: parseFloat(formData.priceSale),
-        quantityStock: isRecipe ? 0 : parseFloat(formData.quantityStock),
+        ...(stockChanged ? { quantityStock: currentStock } : {}),
         stockMinAlert: formData.stockMinAlert ? parseFloat(formData.stockMinAlert) : null,
         brandId: formData.brandId ? parseInt(formData.brandId) : null,
         categoryId: parseInt(formData.categoryId),

@@ -138,7 +138,7 @@ export default async function handler(
                   productId: true,
                   quantity: true,
                   product: {
-                    select: { isRecipe: true },
+                    select: { isRecipe: true, name: true },
                   },
                 },
               },
@@ -215,35 +215,19 @@ export default async function handler(
             continue;
           }
 
-          // Reponer en stock general del producto
-          await tx.product.update({
-            where: { id: item.productId },
-            data: {
-              quantityStock: {
-                increment: item.quantity,
-              },
-            },
+          // Reponer en la sucursal donde se vendió (o la Principal). El servicio
+          // recalcula el global como suma de sucursales y deja el movimiento en
+          // el ledger local.
+          const { applyMovement } = await import('../../../lib/stockService');
+          await applyMovement(tx, {
+            productId: item.productId,
+            branchId: restoreBranchId ?? null,
+            delta: Number(item.quantity),
+            reason: 'SALE_CANCEL',
+            refType: 'Sale',
+            refId: id,
+            note: item.product?.name || null,
           });
-
-          // Reponer en ProductBranchStock para mantener consistencia con syncService
-          if (restoreBranchId) {
-            await tx.productBranchStock.upsert({
-              where: {
-                productId_branchId: {
-                  productId: item.productId,
-                  branchId: restoreBranchId,
-                },
-              },
-              update: {
-                quantityStock: { increment: item.quantity },
-              },
-              create: {
-                productId: item.productId,
-                branchId: restoreBranchId,
-                quantityStock: item.quantity,
-              },
-            });
-          }
         }
 
         // 5. Eliminar la venta

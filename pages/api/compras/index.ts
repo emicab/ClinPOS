@@ -146,32 +146,20 @@ export default async function handler(
 
           if (purchaseStatus === PurchaseStatus.RECEIVED) {
             const stockQty = item.quantityReceived ?? item.quantity;
+            const { applyMovement } = await import("../../../lib/stockService");
+            await applyMovement(tx, {
+              productId: item.productId,
+              branchId: purchaseBranchId,
+              delta: Number(stockQty),
+              reason: "PURCHASE_RECEIVE",
+              refType: "Purchase",
+              refId: newPurchase.id,
+            });
             // El costo del ingrediente/producto = última compra recibida.
             await tx.product.update({
               where: { id: item.productId },
-              data: {
-                quantityStock: {
-                  increment: stockQty,
-                },
-                pricePurchase: new Decimal(item.purchasePrice),
-              },
+              data: { pricePurchase: new Decimal(item.purchasePrice) },
             });
-
-            if (purchaseBranchId !== null) {
-                await tx.productBranchStock.upsert({
-                  where: {
-                    productId_branchId: { productId: item.productId, branchId: purchaseBranchId }
-                  },
-                  update: {
-                    quantityStock: { increment: stockQty }
-                  },
-                  create: {
-                    productId: item.productId,
-                    branchId: purchaseBranchId,
-                    quantityStock: stockQty
-                  }
-                });
-            }
           }
         }
 

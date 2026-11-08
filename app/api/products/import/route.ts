@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import prisma from '@/lib/prisma';
 import type { Prisma } from '@prisma/client';
-import { resolveTargetBranch, setBranchStock } from '@/lib/stockAdjust';
+import { resolveTargetBranch } from '@/lib/stockAdjust';
 
 export async function POST(req: Request) {
   const normalizeName = (s: unknown) =>
@@ -78,10 +78,16 @@ export async function POST(req: Request) {
     const { branchId: importBranchId } = await resolveTargetBranch(null);
     const stockTouchedIds = new Set<number>();
     const applyImportedStock = async (productId: number, qty: number) => {
-      if (importBranchId !== null) {
-        await setBranchStock(prisma, productId, importBranchId, qty);
-        stockTouchedIds.add(productId);
-      }
+      const { setStock } = await import('@/lib/stockService');
+      await setStock(prisma, {
+        productId,
+        branchId: importBranchId,
+        quantity: qty,
+        reason: 'CSV_IMPORT',
+        refType: 'ProductImport',
+        refId: productId,
+      });
+      stockTouchedIds.add(productId);
     };
 
     for (const productData of products) {
@@ -171,10 +177,9 @@ export async function POST(req: Request) {
                 if (pp !== undefined) updateData.pricePurchase = pp;
                 const ps = numOrUndefined(priceSale);
                 if (ps !== undefined) updateData.priceSale = ps;
-                // Ojo: Sobre-escribimos el stock con el valor del CSV.
-                // Si quisieras sumar, sería: quantityStock: { increment: ... }
+                // El stock se aplica abajo vía lib/stockService (por sucursal y
+                // recalculando el global). No se escribe directo en Product.
                 const qs = numOrUndefined(quantityStock);
-                if (qs !== undefined) updateData.quantityStock = qs; // sin sucursales: queda el global
                 if ('stockMinAlert' in productData) {
                     updateData.stockMinAlert = numOrUndefined(stockMinAlert) ?? null;
                 }
@@ -214,7 +219,8 @@ export async function POST(req: Request) {
             description: description || null,
             pricePurchase: numOrUndefined(pricePurchase) ?? 0,
             priceSale: numOrUndefined(priceSale) ?? 0,
-            quantityStock: numOrUndefined(quantityStock) ?? 0,
+            // El stock inicial lo escribe applyImportedStock (servicio único).
+            quantityStock: 0,
             stockMinAlert: numOrUndefined(stockMinAlert) ?? null,
             brand: { connect: { id: createBrand.id } },
             category: { connect: { id: createCategory.id } },

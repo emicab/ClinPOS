@@ -212,30 +212,16 @@ export default async function handler(
             const { deductRecipeStock } = await import("../../../lib/recipeStock");
             await deductRecipeStock(prisma, item.productId, item.quantity, stockBranchId);
           } else {
-            await db.product.update({
-              where: { id: item.productId },
-              data: {
-                quantityStock: {
-                  decrement: item.quantity
-                }
-              }
+            const { applyMovement } = await import("../../../lib/stockService");
+            await applyMovement(prisma, {
+              productId: item.productId,
+              branchId: stockBranchId ?? null,
+              delta: -Number(item.quantity),
+              reason: "WEB_ORDER_RESERVE",
+              refType: "WebOrder",
+              refId: newOrder.id,
+              allowNegative: true,
             });
-            if (stockBranchId) {
-              await db.productBranchStock.upsert({
-                where: {
-                  productId_branchId: {
-                    productId: item.productId,
-                    branchId: stockBranchId,
-                  },
-                },
-                update: { quantityStock: { decrement: item.quantity } },
-                create: {
-                  productId: item.productId,
-                  branchId: stockBranchId,
-                  quantityStock: -item.quantity,
-                },
-              });
-            }
           }
         } catch (stkErr) {
           console.warn("Error descontando stock para item:", item, stkErr);

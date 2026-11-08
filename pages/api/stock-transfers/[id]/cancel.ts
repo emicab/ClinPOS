@@ -55,13 +55,15 @@ export default async function handler(
         data: { status: 'PROCESSING' },
       });
       if (claimed.count === 0) throw new Error('TRANSFER_ALREADY_RESPONDED');
+      const { applyMovement } = await import('../../../../lib/stockService');
       for (const item of transfer.items) {
-        await tx.productBranchStock.upsert({
-          where: {
-            productId_branchId: { productId: item.productId, branchId: transfer.sourceBranchId },
-          },
-          update: { quantityStock: { increment: item.quantity } },
-          create: { productId: item.productId, branchId: transfer.sourceBranchId, quantityStock: item.quantity },
+        await applyMovement(tx, {
+          productId: item.productId,
+          branchId: transfer.sourceBranchId,
+          delta: Number(item.quantity),
+          reason: "TRANSFER_CANCEL",
+          refType: "StockTransfer",
+          refId: transferId,
         });
       }
       await tx.stockTransfer.update({

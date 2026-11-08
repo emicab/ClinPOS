@@ -91,6 +91,7 @@ export default async function handler(
         : (await resolveTargetBranch(null)).branchId;
 
       const result = await prisma.$transaction(async (tx) => {
+        const { applyMovement } = await import('../../../lib/stockService');
         // 1. Obtener la compra actual con sus items
         const existingPurchase = await tx.purchase.findUnique({
           where: { id },
@@ -119,24 +120,15 @@ export default async function handler(
           // Revertir stock si la compra estaba recibida
           if (oldStatus === PurchaseStatus.RECEIVED) {
             for (const item of existingPurchase.items) {
-              const revertedQty = item.quantityReceived ?? item.quantity;
-              const product = await tx.product.findUnique({
-                where: { id: item.productId },
-                select: { quantityStock: true, name: true },
+              const revertedQty = Number(item.quantityReceived ?? item.quantity);
+              await applyMovement(tx, {
+                productId: item.productId,
+                branchId: purchaseBranchId,
+                delta: -revertedQty,
+                reason: "PURCHASE_EDIT_REVERT",
+                refType: "Purchase",
+                refId: id,
               });
-              if (product && product.quantityStock < revertedQty) {
-                throw new Error(`Stock insuficiente para revertir "${product.name}". Disponible: ${product.quantityStock}, Requerido: ${revertedQty}.`);
-              }
-              await tx.product.update({
-                where: { id: item.productId },
-                data: { quantityStock: { decrement: revertedQty } },
-              });
-              if (purchaseBranchId !== null) {
-                await tx.productBranchStock.updateMany({
-                  where: { productId: item.productId, branchId: purchaseBranchId },
-                  data: { quantityStock: { decrement: revertedQty } },
-                });
-              }
             }
           }
 
@@ -162,21 +154,19 @@ export default async function handler(
             calculatedTotal = calculatedTotal.plus(new Decimal(item.purchasePrice).times(item.quantity));
 
             if (newStatus === PurchaseStatus.RECEIVED && stockQty > 0) {
+              await applyMovement(tx, {
+                productId: item.productId,
+                branchId: purchaseBranchId,
+                delta: Number(stockQty),
+                reason: "PURCHASE_RECEIVE",
+                refType: "Purchase",
+                refId: id,
+              });
+              // El costo del ingrediente/producto = última compra recibida.
               await tx.product.update({
                 where: { id: item.productId },
-                data: {
-                  quantityStock: { increment: stockQty },
-                  // El costo del ingrediente/producto = última compra recibida.
-                  pricePurchase: new Decimal(item.purchasePrice),
-                },
+                data: { pricePurchase: new Decimal(item.purchasePrice) },
               });
-              if (purchaseBranchId !== null) {
-                await tx.productBranchStock.upsert({
-                  where: { productId_branchId: { productId: item.productId, branchId: purchaseBranchId } },
-                  update: { quantityStock: { increment: stockQty } },
-                  create: { productId: item.productId, branchId: purchaseBranchId, quantityStock: stockQty }
-                });
-              }
             }
           }
 
@@ -188,41 +178,29 @@ export default async function handler(
           const existingItems = await tx.purchaseItem.findMany({ where: { purchaseId: id } });
           for (const item of existingItems) {
             if (oldStatus !== PurchaseStatus.RECEIVED && newStatus === PurchaseStatus.RECEIVED) {
-              const receivedQty = item.quantityReceived ?? item.quantity;
+              const receivedQty = Number(item.quantityReceived ?? item.quantity);
+              await applyMovement(tx, {
+                productId: item.productId,
+                branchId: bId && !isNaN(bId) ? bId : null,
+                delta: receivedQty,
+                reason: "PURCHASE_RECEIVE",
+                refType: "Purchase",
+                refId: id,
+              });
               await tx.product.update({
                 where: { id: item.productId },
-                data: {
-                  quantityStock: { increment: receivedQty },
-                  // El costo del ingrediente/producto = última compra recibida.
-                  pricePurchase: new Decimal(item.purchasePrice),
-                },
+                data: { pricePurchase: new Decimal(item.purchasePrice) },
               });
-              if (bId && !isNaN(bId)) {
-                await tx.productBranchStock.upsert({
-                  where: { productId_branchId: { productId: item.productId, branchId: bId } },
-                  update: { quantityStock: { increment: receivedQty } },
-                  create: { productId: item.productId, branchId: bId, quantityStock: receivedQty }
-                });
-              }
             } else if (oldStatus === PurchaseStatus.RECEIVED && newStatus !== PurchaseStatus.RECEIVED) {
-              const revertedQty = item.quantityReceived ?? item.quantity;
-              const product = await tx.product.findUnique({
-                where: { id: item.productId },
-                select: { quantityStock: true, name: true },
+              const revertedQty = Number(item.quantityReceived ?? item.quantity);
+              await applyMovement(tx, {
+                productId: item.productId,
+                branchId: bId && !isNaN(bId) ? bId : null,
+                delta: -revertedQty,
+                reason: "PURCHASE_STATUS_REVERT",
+                refType: "Purchase",
+                refId: id,
               });
-              if (product && product.quantityStock < revertedQty) {
-                throw new Error(`Stock insuficiente para revertir "${product.name}". Disponible: ${product.quantityStock}, Requerido: ${revertedQty}.`);
-              }
-              await tx.product.update({
-                where: { id: item.productId },
-                data: { quantityStock: { decrement: revertedQty } },
-              });
-              if (bId && !isNaN(bId)) {
-                await tx.productBranchStock.updateMany({
-                  where: { productId: item.productId, branchId: bId },
-                  data: { quantityStock: { decrement: revertedQty } }
-                });
-              }
             }
           }
           updateData.totalAmount = existingPurchase.totalAmount;
@@ -367,6 +345,7 @@ export default async function handler(
     try {
       const deleteBranchId = (await resolveTargetBranch(null)).branchId;
       const result = await prisma.$transaction(async (tx) => {
+        const { applyMovement } = await import('../../../lib/stockService');
         const purchaseToDelete = await tx.purchase.findUnique({
           where: { id },
           include: { items: true },
@@ -383,24 +362,15 @@ export default async function handler(
             quantity: Number(item.quantityReceived ?? item.quantity),
           }));
           for (const item of purchaseToDelete.items) {
-            const revertedQty = item.quantityReceived ?? item.quantity;
-            const product = await tx.product.findUnique({
-              where: { id: item.productId },
-              select: { quantityStock: true, name: true },
+            const revertedQty = Number(item.quantityReceived ?? item.quantity);
+            await applyMovement(tx, {
+              productId: item.productId,
+              branchId: deleteBranchId,
+              delta: -revertedQty,
+              reason: "PURCHASE_DELETE_REVERT",
+              refType: "Purchase",
+              refId: id,
             });
-            if (product && product.quantityStock < revertedQty) {
-              throw new Error(`Stock insuficiente para eliminar la compra del producto "${product.name}". Disponible: ${product.quantityStock}, Requerido: ${revertedQty}.`);
-            }
-            await tx.product.update({
-              where: { id: item.productId },
-              data: { quantityStock: { decrement: revertedQty } },
-            });
-            if (deleteBranchId !== null) {
-              await tx.productBranchStock.updateMany({
-                where: { productId: item.productId, branchId: deleteBranchId },
-                data: { quantityStock: { decrement: revertedQty } },
-              });
-            }
           }
         }
 
