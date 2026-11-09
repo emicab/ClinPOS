@@ -1,0 +1,58 @@
+name: Tests
+
+on:
+  push:
+    branches: ["main", "feature/**", "fix/**", "chore/**", "test/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vitest:
+    name: Vitest (esquema + dominio + API)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Generar Prisma Client
+        run: npx prisma generate
+
+      - name: Tests
+        run: npm test
+
+      - name: Cobertura
+        if: always()
+        run: npm run test:cov
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cobertura
+          path: test/.coverage
+          retention-days: 7
+
+  rust:
+    name: Cargo test (shell Tauri)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Tests de lib.rs
+        run: cargo test --manifest-path src-tauri/Cargo.toml
