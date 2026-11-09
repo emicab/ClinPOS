@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kill-stale-node-servers"
+description = "Enables the kill_stale_node_servers command without any pre-configured scope."
+commands.allow = ["kill_stale_node_servers"]
+
+[[permission]]
+identifier = "deny-kill-stale-node-servers"
+description = "Denies the kill_stale_node_servers command without any pre-configured scope."
+commands.deny = ["kill_stale_node_servers"]

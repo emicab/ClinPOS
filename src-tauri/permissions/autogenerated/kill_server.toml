@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-kill-server"
+description = "Enables the kill_server command without any pre-configured scope."
+commands.allow = ["kill_server"]
+
+[[permission]]
+identifier = "deny-kill-server"
+description = "Denies the kill_server command without any pre-configured scope."
+commands.deny = ["kill_server"]
