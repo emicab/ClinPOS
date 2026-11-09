@@ -59,6 +59,12 @@ test/
 | `api/compras/purchases.test.ts` | alta/edición/borrado de compras, `Decimal`, PENDING vs RECEIVED, `quantityReceived`, sucursal (body → equipo → central → global), costo, gasto + caja, snapshots de receta y reversión atómica |
 | `api/stock-transfers/transfers.test.ts` | gate Pro, envío (`TRANSFER_OUT`), aceptar/rechazar/parcial, conservación `enviado = recibido + devuelto`, sobre-recepción, doble respuesta y cancelación |
 | `unit/sync/outbox.test.ts` | gating local/Pro, dedupe por entidad+clave, tombstones UPSERT↔DELETE, rutas por entidad, prioridad, backoff, error de red vs rechazo, purga/reactivación |
+| `unit/pricing/priceAdjuster.test.ts` | redondeos (2 decimales/entero/decena/centena), aumento/descuento porcentual y fijo, set, piso en 0, markup vs margen sobre venta |
+| `unit/licensing/licenseStatus.test.ts` | clave Pro por prefijo (BASICO con "PRO" no escala), plan local por 4 marcas, revalidación online/offline, clave inexistente/desactivada/vencida/otro hardware |
+| `unit/stock/stockReview.test.ts` | Regla de Oro: faltantes por sucursal y global, elaborados combinados, nota con unidades, marcado PENDING_REVIEW y revalidación |
+| `unit/security/encryption.test.ts` | AES-256-GCM ida y vuelta, IV distinto, formato `ENC::`, lectura de claves legacy v1/v2, dato manipulado → vacío |
+| `unit/sync/syncConflict.test.ts` | `isCloudNewer` estricto (empate no pisa), registro/dedupe de conflictos OPEN, fallo silencioso |
+| `unit/dashboard/data.test.ts` | conteos, stock bajo por sucursal/global, ingresos del mes, series diarias, comparación mensual, top productos, COGS/gastos/ganancia y medios de pago |
 
 ## Cobertura (Fase 3)
 
@@ -77,6 +83,21 @@ Todas las funciones de esos archivos están cubiertas (100%). El gate real es el
 contrato, no el número: cada fase se validó rompiendo a propósito la regla
 central (p. ej. sumar tarjeta al arqueo, saltear la reversión de stock, no
 escribir el tombstone, aceptar de más) y comprobando que la suite falla.
+
+## Cobertura (Fase 4)
+
+| Archivo | Stmts | Branch |
+|---|---|---|
+| `lib/priceAdjuster.ts` | 100% | 100% |
+| `lib/syncConflict.ts` | 100% | 100% |
+| `lib/licenseStatus.ts` | 96.17% | 80.95% |
+| `lib/stockReview.ts` | 95.80% | 87.50% |
+| `lib/encryption.ts` | 94.62% | 68.96% |
+| `lib/data.ts` | 89.07% | 73.56% |
+
+En esta fase también se rompieron 6 reglas a propósito (piso en 0 del precio,
+plan intacto sin red, faltante por cantidad, empate de fechas, secreto ilegible
+y ventas PENDING en ingresos): las 6 fueron detectadas.
 
 ## Deuda conocida
 
@@ -98,3 +119,17 @@ escribir el tombstone, aceptar de más) y comprobando que la suite falla.
   cola. Un rechazo no-red (p. ej. RPC de stock con 500) se marca `FAILED` de
   inmediato con `attempts=1`; el ciclo de housekeeping lo vuelve a `PENDING`
   recién a las 6 horas. El test fija ese contrato.
+- `lib/data.ts` mezcla dos formas de calcular el día local: `getLocalDateBoundary`
+  usa un offset UTC-3 fijo y varias funciones restan 3 horas a mano. Hoy Argentina
+  no tiene horario de verano, pero el offset está hardcodeado: cambiar de zona o
+  país corre los cortes de día/mes.
+- `lib/licenseStatus.ts` trata un HTTP no-ok (o una respuesta que no sea array)
+  como **offline** y conserva el plan Pro. Es deliberado para no castigar al local
+  por un backend caído, pero una clave revocada no baja hasta que el endpoint
+  vuelva a responder.
+- `lib/encryption.ts`: si se pierde `CLINPOS_ENCRYPTION_SECRET` o cambia el
+  hardware/usuario, el dato es irrecuperable por diseño y `decryptText` devuelve
+  `""`. Los fallbacks v1/v2 solo sirven para datos cifrados con esas versiones.
+- `lib/stockReview.ts` no puede recibir un `productId` inexistente: la FK de
+  `WebOrderItem` lo impide antes. La rama defensiva `if (!product) continue`
+  queda sin test por ese motivo.

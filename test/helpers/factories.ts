@@ -253,6 +253,7 @@ export async function makeExpense(
     description?: string;
     amount?: string;
     category?: string;
+    expenseDate?: Date;
     paymentType?: "CASH" | "TRANSFER" | "CARD" | "QR" | "OTHER" | "ON_ACCOUNT" | "MERCADO_PAGO";
   } = {},
 ) {
@@ -262,6 +263,7 @@ export async function makeExpense(
       amount: options.amount ?? "0",
       category: options.category ?? "Mercadería",
       paymentType: options.paymentType ?? "CASH",
+      ...(options.expenseDate ? { expenseDate: options.expenseDate } : {}),
     },
   });
 }
@@ -318,6 +320,7 @@ export async function makeSale(
     clientId?: number;
     branchId?: number;
     status?: "COMPLETED" | "PENDING" | "CANCELLED";
+    saleDate?: Date;
   },
 ) {
   return db.sale.create({
@@ -328,6 +331,81 @@ export async function makeSale(
       status: input.status ?? "COMPLETED",
       ...(input.clientId ? { clientId: input.clientId } : {}),
       ...(input.branchId ? { branchId: input.branchId } : {}),
+      ...(input.saleDate ? { saleDate: input.saleDate } : {}),
     },
+  });
+}
+
+/** Ítem de una venta (cantidad, precio y costo congelado al momento). */
+export async function makeSaleItem(
+  db: Db,
+  saleId: number,
+  input: {
+    productId?: number | null;
+    quantity?: number;
+    priceAtSale?: string;
+    purchasePriceAtSale?: string;
+    productName?: string | null;
+  } = {},
+) {
+  return db.saleItem.create({
+    data: {
+      saleId,
+      productId: input.productId ?? null,
+      quantity: input.quantity ?? 1,
+      priceAtSale: input.priceAtSale ?? "100",
+      purchasePriceAtSale: input.purchasePriceAtSale ?? "0",
+      productName: input.productName ?? null,
+    },
+  });
+}
+
+/** Pedido web con sus ítems (para stockReview y tableros). */
+export async function makeWebOrder(
+  db: Db,
+  input: {
+    status?:
+      | "PENDING_PAYMENT"
+      | "PENDING_PREPARATION"
+      | "READY_FOR_PICKUP"
+      | "SHIPPED"
+      | "DELIVERED"
+      | "CANCELLED"
+      | "PENDING_REVIEW";
+    branchId?: number | null;
+    stockReviewAt?: Date | null;
+    stockReviewNote?: string | null;
+    items?: Array<{ productId: number; quantity: number; unitPrice?: string }>;
+  } = {},
+) {
+  const items = input.items ?? [];
+  const subtotal = items.reduce(
+    (acc, i) => acc + Number(i.unitPrice ?? "100") * i.quantity,
+    0,
+  );
+  return db.webOrder.create({
+    data: {
+      webOrderNumber: uniq("WEB"),
+      clientName: uniq("cliente-web"),
+      clientPhone: "555-0000",
+      deliveryType: "PICKUP",
+      branchId: input.branchId ?? null,
+      paymentMethod: "CASH_ON_DELIVERY",
+      paymentStatus: "PENDING",
+      status: input.status ?? "PENDING_PREPARATION",
+      totalAmount: String(subtotal),
+      subtotalAmount: String(subtotal),
+      stockReviewAt: input.stockReviewAt ?? null,
+      stockReviewNote: input.stockReviewNote ?? null,
+      items: {
+        create: items.map((i) => ({
+          productId: i.productId,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice ?? "100",
+          subtotal: String(Number(i.unitPrice ?? "100") * i.quantity),
+        })),
+      },
+    },
+    include: { items: true },
   });
 }
