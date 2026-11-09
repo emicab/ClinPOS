@@ -34,6 +34,8 @@ const FOCUS_MODELS = new Set([
   "Coupon",
   "Sale",
   "SaleItem",
+  // Ledger local de stock: lo escribe lib/stockService.ts en cada movimiento.
+  "StockMovement",
 ]);
 
 // Tablas internas del protocolo de sincronización: se validan desde health y

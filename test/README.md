@@ -29,6 +29,12 @@ npm run test:rust   # tests de src-tauri/src/lib.rs
    `enqueueOutbox`: `cloud_sync_enabled=true` y plan Pro (`app_plan=pro`).
    Después de escribir las `Setting`, llamar a `invalidateCloudPolicyCache()`
    porque el flag se cachea 5 s. `drainOutbox` solo exige la nube encendida.
+9. Toda **tabla nueva** de `schema.prisma` tiene que crearse también en
+   `src-tauri/src/lib.rs` (`MIGRATIONS` + repair de arranque) y en
+   `lib/ensureLocalSyncSchema.ts`. El template solo cubre instalaciones nuevas;
+   las existentes se migran con ese DDL. `schema/stock-ledger-upgrade.test.ts`
+   simula el upgrade y `api/health/stock-ledger-repair.test.ts` cubre el repair
+   de Node.
 
 ## Estructura
 
@@ -51,6 +57,8 @@ test/
 | `schema/rust-migrator.test.ts` | el DDL de `lib.rs` no tiene typos, columnas fantasma ni `CREATE TABLE` no idempotentes |
 | `schema/check-drift.test.ts` | el gate de `build:next` sigue pasando |
 | `schema/migrations.test.ts` | documenta (con `it.fails`) que la cadena de migraciones **no** puede reconstruir la base |
+| `schema/stock-ledger-upgrade.test.ts` | simula una base 1.18.4 sin `StockMovement` y verifica que la migración v28 la recrea idéntica al schema, de forma idempotente y con FK real |
+| `api/health/stock-ledger-repair.test.ts` | `ensureLocalSyncSchema()` recrea `StockMovement` (tabla + índices) en el arranque standalone |
 | `unit/db-harness.test.ts` | el aislamiento de DB funciona |
 | `unit/stock/stockService.test.ts` | `Product.quantityStock = Σ ProductBranchStock`, aislamiento por sucursal, rechazo de negativos, `setStock`, rollback de `withStockTransaction` |
 | `unit/stock/recipeStock.test.ts` | expansión de recetas (anidadas, compartidas, ciclos, profundidad), disponibilidad derivada, faltantes combinados, descuento/reposición atómicos, costo y snapshots |

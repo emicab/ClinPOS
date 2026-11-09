@@ -22,6 +22,7 @@ const EXPECTED_TABLES = [
   "SyncOutbox",
   "SyncTombstone",
   "SyncConflict",
+  "StockMovement",
 ] as const;
 
 // Cobertura total de escalares de los modelos foco (ver EXPECTED_COLUMNS en
@@ -178,6 +179,16 @@ const EXPECTED_COLUMNS: Array<[table: string, column: string]> = [
   ["SyncOutbox", "lockedAt"],
   ["SyncConflict", "status"],
   ["SyncTombstone", "entityKey"],
+  ["StockMovement", "id"],
+  ["StockMovement", "productId"],
+  ["StockMovement", "branchId"],
+  ["StockMovement", "delta"],
+  ["StockMovement", "quantityAfter"],
+  ["StockMovement", "reason"],
+  ["StockMovement", "refType"],
+  ["StockMovement", "refId"],
+  ["StockMovement", "note"],
+  ["StockMovement", "createdAt"],
 ];
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

@@ -736,6 +736,32 @@ const MIGRATIONS: &[Migration] = &[
             CREATE INDEX IF NOT EXISTS "ConsignmentItem_productId_idx" ON "ConsignmentItem"("productId");
         "#,
     },
+    Migration {
+        version: 28,
+        name: "add_stock_movement_ledger",
+        // lib/stockService.ts escribe en StockMovement en cada venta, compra,
+        // traspaso y receta. Sin esta tabla, una instalación que actualiza
+        // falla con P2021 en la primera operación de stock. Solo aditiva.
+        sql: r#"
+            CREATE TABLE IF NOT EXISTS "StockMovement" (
+                "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                "productId" INTEGER NOT NULL,
+                "branchId" INTEGER,
+                "delta" REAL NOT NULL,
+                "quantityAfter" REAL NOT NULL,
+                "reason" TEXT NOT NULL,
+                "refType" TEXT,
+                "refId" TEXT,
+                "note" TEXT,
+                "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                CONSTRAINT "StockMovement_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+                CONSTRAINT "StockMovement_branchId_fkey" FOREIGN KEY ("branchId") REFERENCES "Branch" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS "StockMovement_productId_branchId_idx" ON "StockMovement"("productId", "branchId");
+            CREATE INDEX IF NOT EXISTS "StockMovement_createdAt_idx" ON "StockMovement"("createdAt");
+            CREATE INDEX IF NOT EXISTS "StockMovement_refType_refId_idx" ON "StockMovement"("refType", "refId");
+        "#,
+    },
 ];
 
 // ── Declarative safety net ─────────────────────────────────────────────
@@ -982,6 +1008,36 @@ fn ensure_sync_protocol_tables(conn: &Connection) {
     }
 }
 
+// Igual que el repair de sync: se ejecuta en cada arranque para reparar
+// instalaciones donde la migración v28 quedó marcada sin crear la tabla (o el
+// archivo se reemplazó por un backup anterior). Idempotente.
+fn ensure_stock_ledger_table(conn: &Connection) {
+    let statements = [
+        r#"CREATE TABLE IF NOT EXISTS "StockMovement" (
+            "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+            "productId" INTEGER NOT NULL,
+            "branchId" INTEGER,
+            "delta" REAL NOT NULL,
+            "quantityAfter" REAL NOT NULL,
+            "reason" TEXT NOT NULL,
+            "refType" TEXT,
+            "refId" TEXT,
+            "note" TEXT,
+            "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            CONSTRAINT "StockMovement_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+            CONSTRAINT "StockMovement_branchId_fkey" FOREIGN KEY ("branchId") REFERENCES "Branch" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+        )"#,
+        r#"CREATE INDEX IF NOT EXISTS "StockMovement_productId_branchId_idx" ON "StockMovement"("productId", "branchId")"#,
+        r#"CREATE INDEX IF NOT EXISTS "StockMovement_createdAt_idx" ON "StockMovement"("createdAt")"#,
+        r#"CREATE INDEX IF NOT EXISTS "StockMovement_refType_refId_idx" ON "StockMovement"("refType", "refId")"#,
+    ];
+    for statement in statements {
+        if let Err(error) = conn.execute(statement, []) {
+            log_line!("[Migrations] stock ledger repair error: {}", error);
+        }
+    }
+}
+
 fn run_migrations(db_path: &Path) {
     let conn = match Connection::open(db_path) {
         Ok(c) => c,
@@ -1081,6 +1137,7 @@ fn run_migrations(db_path: &Path) {
     }
 
     ensure_sync_protocol_tables(&conn);
+    ensure_stock_ledger_table(&conn);
 
     // Red de seguridad declarativa: crea cualquier columna esperada que falte,
     // aunque su migración versionada se haya marcado aplicada en el pasado.

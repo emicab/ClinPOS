@@ -63,6 +63,26 @@ export function ensureLocalSyncSchema(): Promise<void> {
         )`,
         `CREATE INDEX IF NOT EXISTS "SyncConflict_status_idx" ON "SyncConflict"("status")`,
         `CREATE INDEX IF NOT EXISTS "SyncConflict_entity_entityKey_status_idx" ON "SyncConflict"("entity", "entityKey", "status")`,
+        // Ledger local de stock (migración v28 de Tauri). Sin esta tabla,
+        // lib/stockService.ts falla con P2021 en la primera operación de stock
+        // de una instalación que actualiza desde una versión anterior.
+        `CREATE TABLE IF NOT EXISTS "StockMovement" (
+          "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+          "productId" INTEGER NOT NULL,
+          "branchId" INTEGER,
+          "delta" REAL NOT NULL,
+          "quantityAfter" REAL NOT NULL,
+          "reason" TEXT NOT NULL,
+          "refType" TEXT,
+          "refId" TEXT,
+          "note" TEXT,
+          "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          CONSTRAINT "StockMovement_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
+          CONSTRAINT "StockMovement_branchId_fkey" FOREIGN KEY ("branchId") REFERENCES "Branch" ("id") ON DELETE SET NULL ON UPDATE CASCADE
+        )`,
+        `CREATE INDEX IF NOT EXISTS "StockMovement_productId_branchId_idx" ON "StockMovement"("productId", "branchId")`,
+        `CREATE INDEX IF NOT EXISTS "StockMovement_createdAt_idx" ON "StockMovement"("createdAt")`,
+        `CREATE INDEX IF NOT EXISTS "StockMovement_refType_refId_idx" ON "StockMovement"("refType", "refId")`,
       ];
 
       for (const statement of statements) await execute(statement);
