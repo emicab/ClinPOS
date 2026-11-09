@@ -190,7 +190,14 @@ export async function makePurchase(
   input: {
     supplierId: number;
     status?: "PENDING" | "ORDERED" | "RECEIVED" | "CANCELLED";
-    items: Array<{ productId: number; quantity: number; purchasePrice: string }>;
+    paymentType?: "CASH" | "TRANSFER" | "CARD" | "QR" | "OTHER" | "ON_ACCOUNT" | "MERCADO_PAGO";
+    purchaseDate?: Date;
+    items: Array<{
+      productId: number;
+      quantity: number;
+      purchasePrice: string;
+      quantityReceived?: number | null;
+    }>;
   },
 ) {
   const total = input.items.reduce(
@@ -202,14 +209,102 @@ export async function makePurchase(
       supplierId: input.supplierId,
       totalAmount: String(total),
       status: input.status ?? "RECEIVED",
+      ...(input.paymentType ? { paymentType: input.paymentType } : {}),
+      ...(input.purchaseDate ? { purchaseDate: input.purchaseDate } : {}),
       items: {
         create: input.items.map((i) => ({
           productId: i.productId,
           quantity: i.quantity,
           purchasePrice: i.purchasePrice,
+          ...(i.quantityReceived === undefined ? {} : { quantityReceived: i.quantityReceived }),
         })),
       },
     },
+  });
+}
+
+/** Movimiento de caja suelto (para probar el cierre sin pasar por una venta). */
+export async function makeCashMovement(
+  db: Db,
+  cashRegisterId: number,
+  options: {
+    type?: string;
+    paymentType?: string | null;
+    amount?: string;
+    sourceId?: number | null;
+    description?: string | null;
+  } = {},
+) {
+  return db.cashMovement.create({
+    data: {
+      cashRegisterId,
+      type: options.type ?? "SALE",
+      paymentType: options.paymentType === undefined ? "CASH" : options.paymentType,
+      amount: options.amount ?? "0",
+      sourceId: options.sourceId ?? null,
+      description: options.description ?? null,
+    },
+  });
+}
+
+export async function makeExpense(
+  db: Db,
+  options: {
+    description?: string;
+    amount?: string;
+    category?: string;
+    paymentType?: "CASH" | "TRANSFER" | "CARD" | "QR" | "OTHER" | "ON_ACCOUNT" | "MERCADO_PAGO";
+  } = {},
+) {
+  return db.expense.create({
+    data: {
+      description: options.description ?? uniq("gasto"),
+      amount: options.amount ?? "0",
+      category: options.category ?? "Mercadería",
+      paymentType: options.paymentType ?? "CASH",
+    },
+  });
+}
+
+/** Traspaso entre sucursales ya creado (para probar respond/cancel). */
+export async function makeStockTransfer(
+  db: Db,
+  input: {
+    sourceBranchId: number;
+    targetBranchId: number;
+    status?: "SENT" | "PROCESSING" | "COMPLETED" | "REJECTED" | "CANCELLED";
+    items: Array<{
+      productId: number;
+      quantity: number;
+      productName?: string | null;
+      receivedQuantity?: number | null;
+    }>;
+  },
+) {
+  return db.stockTransfer.create({
+    data: {
+      sourceBranchId: input.sourceBranchId,
+      targetBranchId: input.targetBranchId,
+      status: input.status ?? "SENT",
+      items: {
+        create: input.items.map((i) => ({
+          productId: i.productId,
+          quantity: i.quantity,
+          productName: i.productName ?? null,
+          ...(i.receivedQuantity === undefined ? {} : { receivedQuantity: i.receivedQuantity }),
+        })),
+      },
+    },
+    include: { items: true },
+  });
+}
+
+/** Escribe una Setting del negocio (plan, sucursal del equipo, etc.). */
+export async function setSetting(db: Db, key: string, value: string) {
+  return db.setting.upsert({
+    where: { key },
+    update: { value },
+    create: { key, value },
   });
 }
 
