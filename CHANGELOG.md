@@ -2,6 +2,23 @@
 
 Todos los cambios notables realizados en el proyecto están detallados a continuación.
 
+## [1.18.5] - 2026-11-09
+
+### Importante al actualizar
+- **Modo local por defecto**: la sincronización con la nube queda apagada (`cloud_sync_enabled=false`). La app ya no consulta Supabase, no encola ni drena operaciones pendientes, y oculta tienda web, pedidos web, backups en nube y avisos de sincronización. La validación de licencia sigue funcionando.
+- **Nueva tabla de movimientos de stock**: la migración se aplica sola al abrir la app. No hay que hacer nada.
+
+### Corregido
+- **Stock por sucursal**: `ProductBranchStock` pasa a ser la única fuente de verdad y `Product.quantityStock` se recalcula como su suma. Ventas, compras, traspasos, consignaciones, pedidos web, recetas y alta/edición/importación escriben por el mismo servicio, validan la sucursal del equipo y rechazan stock negativo salvo que se permita explícitamente. Las alertas de bajo stock se evalúan por sucursal.
+- **Ventas**: validan contra el stock de la sucursal antes de cobrar y registran cada cambio en el libro local de movimientos.
+- **Edición de productos**: si el stock no cambió, no lo toca (antes podía desincronizar la sucursal del global).
+- **Actualización desde 1.18.4**: se crea la tabla `StockMovement` en las bases existentes. Sin esto, la primera venta fallaba con "table StockMovement does not exist".
+- **Instalación limpia**: el template que se empaqueta ya incluye `StockMovement`, así que el ledger funciona desde el primer arranque.
+
+### Añadido
+- **Auditoría de stock** (`scripts/stock-audit.ts`): reporte de solo lectura que detecta global distinto de la suma por sucursal, productos sin fila de sucursal, stock negativo, elaborados con stock físico y estado del ledger. Acepta `--db`, `--csv` y `--fail-on-issues`; nunca repara datos.
+- **Suite de pruebas automáticas**: 383 tests de esquema, stock, ventas, caja, compras, traspasos, licencias, cifrado y dashboard, más los tests de Rust. Corre en CI en cada push y pull request.
+
 ## [1.18.4] - 2026-10-19
 
 ### Corregido
