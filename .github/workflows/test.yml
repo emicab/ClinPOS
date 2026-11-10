@@ -54,5 +54,15 @@ jobs:
         with:
           workspaces: "./src-tauri -> target"
 
+      # build.rs valida los recursos declarados en tauri.conf.json. El glob
+      # ../app_standalone/**/* no existe en un checkout limpio (se genera en
+      # build:next), así que sin este placeholder cargo test falla antes de
+      # compilar los tests.
+      - name: Preparar recursos del bundle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path app_standalone -Force | Out-Null
+          New-Item -ItemType File -Path app_standalone/.keep -Force | Out-Null
+
       - name: Tests de lib.rs
         run: cargo test --manifest-path src-tauri/Cargo.toml
